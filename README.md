@@ -1,36 +1,124 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Brev Doctor 🩺
+
+AI-powered GPU provisioning tool that analyzes your ML repository and automatically configures the perfect Brev.dev environment.
+
+## Features
+
+- **🔍 Smart Analysis** - AI Scout scans your repo for configs, dependencies, and model architectures
+- **🎯 GPU Matching** - Recommends the perfect GPU (L4 to H100) based on your compute needs
+- **🚀 One-Click Deploy** - Creates a PR with setup scripts ready for Brev.dev
+
+## Tech Stack
+
+- **Framework:** Next.js 14+ with App Router
+- **Auth:** NextAuth.js (GitHub OAuth)
+- **AI:** Vercel AI SDK + OpenAI (GPT-4)
+- **Styling:** Tailwind CSS
+- **Validation:** Zod
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js 18+ or Bun
+- GitHub OAuth App credentials
+- OpenAI API key
+
+### Setup
+
+1. Clone the repository:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
+git clone https://github.com/your-username/brev-doctor.git
+cd brev-doctor
+```
+
+2. Install dependencies:
+
+```bash
+bun install
+```
+
+3. Configure environment variables:
+
+```bash
+cp .env.local.example .env.local
+```
+
+Edit `.env.local` with your credentials:
+
+```env
+# GitHub OAuth - Get these from https://github.com/settings/developers
+GITHUB_ID=your_github_client_id
+GITHUB_SECRET=your_github_client_secret
+
+# NextAuth
+NEXTAUTH_URL=http://localhost:3000
+NEXTAUTH_SECRET=your_nextauth_secret_generate_with_openssl_rand_base64_32
+
+# OpenAI API Key
+OPENAI_API_KEY=your_openai_api_key
+```
+
+4. Run the development server:
+
+```bash
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+5. Open [http://localhost:3000](http://localhost:3000)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project Structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+/app
+  /api/auth/[...nextauth]  - NextAuth.js route handler
+  /dashboard               - Dashboard UI entry point
+    /actions               - Server actions
+/lib
+  scout.ts                 - Scout agent (file path filtering)
+  specialist.ts            - Specialist agent (compute analysis)
+  brev-api.ts              - Brev inventory fetcher
+  broker.ts                - Broker agent (GPU matchmaking)
+  github.ts                - GitHub API utilities (fork, commit, PR)
+/components                - React UI components
+/types                     - Zod schemas + TypeScript types
+```
 
-## Learn More
+## How It Works
 
-To learn more about Next.js, take a look at the following resources:
+1. **Authentication** - User signs in with GitHub OAuth (with repo scope)
+2. **Repository Scan** - Fetches the file tree from the selected GitHub repo
+3. **Scout Agent** - AI selects relevant files (configs, dependencies, model code)
+4. **Specialist Agent** - Analyzes file contents to estimate GPU requirements
+5. **Broker Agent** - Matches requirements to Brev.dev GPU inventory
+6. **PR Creation** - Creates a pull request with `.brev/setup.sh` and `brev-launchable.yaml`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Generated Files
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### `.brev/setup.sh`
 
-## Deploy on Vercel
+A bash script with environment setup commands:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+#!/bin/bash
+set -e
+pip install torch transformers
+# ... more setup commands
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### `brev-launchable.yaml`
+
+Brev.dev configuration file:
+
+```yaml
+name: brev-launchable
+version: "1.0"
+compute:
+  gpu: A100-80GB
+  gpuCount: 1
+```
+
+## License
+
+MIT
