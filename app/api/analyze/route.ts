@@ -1,12 +1,13 @@
 import { auth } from "@/lib/auth";
 import { streamObject } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { getBrevInventory } from "@/lib/brev-api";
+import { getBrevInventory, getGpuCatalogDescription, attemptGpuProvisioning, getGpuByName } from "@/lib/brev-api";
 import { getRepoTree, getMultipleFileContents } from "@/lib/github";
-import { ScoutOutputSchema, SpecialistOutputSchema, BrokerOutputSchema } from "@/types/agentSchemas";
+import { ScoutOutputSchema, SpecialistOutputSchema, BrokerOutputSchema, GpuRetryDecisionSchema } from "@/types/agentSchemas";
 import type { RepoMeta, SpecialistOutput, ScoutOutput, BrokerOutput } from "@/types/agentSchemas";
+import { selectGpuInstance, decideGpuRetry, brokerOutputToInstance, findBestInstance } from "@/lib/broker";
 
-export const maxDuration = 90;
+export const maxDuration = 120; // Allow longer for provisioning retries
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -18,10 +19,11 @@ export async function POST(req: Request) {
     });
   }
 
-  const { repoMeta, userFeedback, previousNeeds } = await req.json() as { 
+  const { repoMeta, userFeedback, previousNeeds, attemptProvisioning = false } = await req.json() as { 
     repoMeta: RepoMeta; 
     userFeedback?: string; 
     previousNeeds?: SpecialistOutput;
+    attemptProvisioning?: boolean;
   };
 
   const encoder = new TextEncoder();
@@ -290,73 +292,143 @@ Analyze these files thoroughly and provide your detailed compute requirements.`;
           },
         });
 
-        // Step 6: Broker - GPU matching
+        // Step 6: Broker - GPU selection with full catalog knowledge
         send({
           type: "step_update",
           step: { id: "match", status: "running", startTime: Date.now() },
         });
 
-        const inventory = await getBrevInventory();
+        const inventory = getBrevInventory();
         
-        // Use rule-based matching for reliability
-        // TODO: Reintroduce LLM broker once streaming issues are resolved
-        const { findBestInstance } = await import("@/lib/broker");
-        const match = findBestInstance(specialistResult, inventory);
+        // Streamlined GPU catalog - concise but complete
+        const gpuCatalogConcise = `## AVAILABLE GPUs (sorted by VRAM)
+| GPU | VRAM | Arch | $/hr | Best For |
+|-----|------|------|------|----------|
+| T4 | 16GB | Turing | 0.35 | Budget inference |
+| P4 | 8GB | Pascal | 0.25 | Basic inference |
+| A4000 | 16GB | Ampere | 0.35 | Entry workstation |
+| A10/A10G | 24GB | Ampere | 0.75 | Balanced training/inference |
+| L4 | 24GB | Ada | 0.58 | Best value inference, FP8 |
+| A5000 | 24GB | Ampere | 0.50 | Mid-tier professional |
+| V100 | 32GB | Volta | 2.50 | Legacy training |
+| A100-40GB | 40GB | Ampere | 1.89 | Standard training |
+| L40/L40s | 48GB | Ada | 1.40-1.50 | High perf inference |
+| A40 | 48GB | Ampere | 1.28 | Training + inference |
+| A6000 | 48GB | Ampere | 0.80 | Professional workstation |
+| A100 | 80GB | Ampere | 2.49 | Large model training |
+| H100 | 80GB | Hopper | 3.49 | Fastest, Transformer Engine |
+| H200 | 141GB | Hopper | 4.50 | Maximum VRAM |
+| B200/B300 | 192GB | Blackwell | TBD | Cutting edge |`;
 
-        // Generate thoughtful reasoning
-        let brokerThinking = `**Architecture Filtering**\n`;
-        brokerThinking += `Required: ${specialistResult.recommended_gpu_architecture}\n`;
-        brokerThinking += `Compatible architectures identified based on requirements.\n\n`;
-        
-        brokerThinking += `**VRAM Analysis**\n`;
-        brokerThinking += `Base requirement: ${specialistResult.estimated_vram_gb}GB\n`;
-        brokerThinking += `Added 20-30% headroom for optimizer states and activations\n`;
-        brokerThinking += `Effective target: ~${Math.ceil(specialistResult.estimated_vram_gb * 1.25)}GB\n\n`;
-        
-        if (specialistResult.requires_multi_gpu) {
-          brokerThinking += `**Multi-GPU Requirement**\n`;
-          brokerThinking += `Project requires multiple GPUs. Filtered to multi-GPU configurations.\n\n`;
-        }
-        
-        brokerThinking += `**Cost Optimization**\n`;
-        brokerThinking += `Evaluated ${inventory.length} GPU configurations.\n`;
-        brokerThinking += `Sorted viable options by price (lowest first).\n`;
-        brokerThinking += `Selected most cost-effective option that meets all requirements.\n\n`;
-        
-        if (match.best) {
-          brokerThinking += `**Final Selection: ${match.best.name}**\n`;
-          brokerThinking += `• VRAM: ${match.best.vram}GB × ${match.best.count} = ${match.best.vram * match.best.count}GB total\n`;
-          brokerThinking += `• Architecture: ${match.best.arch}\n`;
-          brokerThinking += `• Price: $${match.best.price.toFixed(2)}/hour\n`;
-          brokerThinking += `• Best value for ${specialistResult.project_complexity} complexity workload`;
-        } else {
-          brokerThinking += `**No Match Found**\n`;
-          brokerThinking += `No GPU in inventory meets the requirements of ${specialistResult.estimated_vram_gb}GB VRAM with ${specialistResult.recommended_gpu_architecture} architecture.`;
-        }
+        // Use LLM-based selection with concise GPU catalog
+        const brokerPrompt = `You are a GPU Provisioning Expert for Brev.dev. Select the optimal GPU.
 
-        const brokerResult = {
-          thinking: brokerThinking,
-          recommended_instance: match.best?.name || "",
-          alternative_instance: match.second_best?.name,
-          match_confidence: match.best ? (match.best.vram * match.best.count >= specialistResult.estimated_vram_gb * 1.3 ? "High" : "Medium") as const : "Low" as const,
-          cost_optimization_notes: match.best 
-            ? `This is the most cost-effective option at $${match.best.price.toFixed(2)}/hr. ${match.second_best ? `Alternative available at $${match.second_best.price.toFixed(2)}/hr for more headroom.` : ""}`
-            : "Consider custom configurations at console.brev.dev",
-        };
+## REQUIREMENTS
+- VRAM: ${specialistResult.estimated_vram_gb}GB
+- Architecture: ${specialistResult.recommended_gpu_architecture}
+- Multi-GPU: ${specialistResult.requires_multi_gpu ? "Yes" : "No"}
+- Complexity: ${specialistResult.project_complexity}
 
-        // Stream broker updates
+${gpuCatalogConcise}
+
+## SELECTION RULES
+1. VRAM must be >= requirement (add 20-30% headroom for training)
+2. Architecture compatibility: Any=all work, Ampere=A10/A100+, Ada=L4/L40+, Hopper=H100/H200 only
+3. Don't over-provision (no H100 for 8GB workload)
+4. Always provide alternative_gpu as fallback
+5. Popular GPUs (L4, T4, A10G) are usually more available
+
+Be concise in thinking. Select the best cost-effective GPU that meets requirements.`;
+
+        let brokerResult: BrokerOutput;
+        let lastStreamState = "";
+        let streamUpdateCount = 0;
+
+        // Send initial "starting" message
         send({
           type: "broker_stream",
-          thinking: brokerThinking,
-          recommendedInstance: brokerResult.recommended_instance,
-          alternativeInstance: brokerResult.alternative_instance,
-          matchConfidence: brokerResult.match_confidence,
-          costNotes: brokerResult.cost_optimization_notes,
+          thinking: "Starting GPU selection analysis...",
+          status: "starting",
         });
 
-        const best = match.best;
-        const second_best = match.second_best;
-        const matchReasoning = brokerThinking;
+        const brokerStream = streamObject({
+          model: openai("gpt-4o"),
+          schema: BrokerOutputSchema,
+          prompt: brokerPrompt,
+        });
+
+        for await (const partial of brokerStream.partialObjectStream) {
+          // Create a state signature to detect ANY change
+          const currentState = JSON.stringify({
+            thinking: partial.thinking?.slice(-100), // Last 100 chars to detect changes
+            gpu: partial.recommended_gpu,
+            vram: partial.recommended_vram,
+            count: partial.gpu_count,
+            alt: partial.alternative_gpu,
+            conf: partial.match_confidence,
+          });
+
+          // Update on ANY change, not just thinking
+          if (currentState !== lastStreamState) {
+            lastStreamState = currentState;
+            streamUpdateCount++;
+            
+            send({
+              type: "broker_stream",
+              thinking: partial.thinking || "Analyzing GPU options...",
+              recommendedGpu: partial.recommended_gpu,
+              recommendedVram: partial.recommended_vram,
+              gpuCount: partial.gpu_count,
+              alternativeGpu: partial.alternative_gpu,
+              matchConfidence: partial.match_confidence,
+              costNotes: partial.cost_optimization_notes,
+              status: "streaming",
+              updateCount: streamUpdateCount,
+            });
+          }
+        }
+
+        brokerResult = await brokerStream.object;
+        
+        // Send completion signal
+        send({
+          type: "broker_stream",
+          thinking: brokerResult.thinking,
+          recommendedGpu: brokerResult.recommended_gpu,
+          recommendedVram: brokerResult.recommended_vram,
+          gpuCount: brokerResult.gpu_count,
+          alternativeGpu: brokerResult.alternative_gpu,
+          matchConfidence: brokerResult.match_confidence,
+          costNotes: brokerResult.cost_optimization_notes,
+          status: "complete",
+        });
+
+        // Convert broker output to BrevInstance for compatibility
+        const recommendedInstance = getGpuByName(brokerResult.recommended_gpu);
+        const alternativeInstance = brokerResult.alternative_gpu && brokerResult.alternative_gpu !== 'none'
+          ? getGpuByName(brokerResult.alternative_gpu) 
+          : null;
+
+        // Build match result
+        const best = recommendedInstance ? {
+          ...recommendedInstance,
+          count: brokerResult.gpu_count,
+        } : null;
+
+        const second_best = alternativeInstance ? {
+          ...alternativeInstance,
+          count: brokerResult.gpu_count,
+        } : null;
+
+        // Generate broker thinking summary
+        let brokerThinking = brokerResult.thinking;
+        
+        if (best) {
+          brokerThinking += `\n\n**Final Selection: ${best.name}${best.count > 1 ? ` × ${best.count}` : ''}**\n`;
+          brokerThinking += `• VRAM: ${best.vram}GB${best.count > 1 ? ` × ${best.count} = ${best.vram * best.count}GB total` : ''}\n`;
+          brokerThinking += `• Architecture: ${best.arch}\n`;
+          brokerThinking += `• Price: $${best.price.toFixed(2)}/hour\n`;
+        }
 
         send({
           type: "step_update",
@@ -366,13 +438,128 @@ Analyze these files thoroughly and provide your detailed compute requirements.`;
             endTime: Date.now(),
             data: {
               inventoryChecked: inventory.length,
-              matchReasoning,
+              matchReasoning: brokerThinking,
               brokerThinking: brokerResult.thinking,
               matchConfidence: brokerResult.match_confidence,
               costNotes: brokerResult.cost_optimization_notes,
             },
           },
         });
+
+        // Optional Step 7: Attempt GPU provisioning if requested
+        let provisioningResult = null;
+        const provisioningAttempts: Array<{
+          gpu: string;
+          vram: number;
+          gpuCount: number;
+          success: boolean;
+          error?: string;
+          errorType?: string;
+        }> = [];
+
+        if (attemptProvisioning && best) {
+          send({
+            type: "step_update",
+            step: { id: "provision", status: "running", startTime: Date.now() },
+          });
+
+          const MAX_RETRIES = 3;
+          let currentGpu = best.name;
+          let currentVram = best.vram;
+          let currentCount = best.count;
+          
+          for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            send({
+              type: "provisioning_attempt",
+              attempt: attempt + 1,
+              gpu: currentGpu,
+              vram: currentVram,
+              gpuCount: currentCount,
+            });
+
+            const result = await attemptGpuProvisioning(
+              currentGpu,
+              currentCount
+            );
+
+            provisioningAttempts.push({
+              gpu: currentGpu,
+              vram: currentVram,
+              gpuCount: currentCount,
+              success: result.success,
+              error: result.error,
+              errorType: result.errorType,
+            });
+
+            if (result.success) {
+              provisioningResult = result;
+              send({
+                type: "provisioning_success",
+                workspaceName: result.workspaceName,
+                gpu: currentGpu,
+                vram: currentVram,
+                gpuCount: currentCount,
+              });
+              break;
+            }
+
+            // Provisioning failed - notify and decide whether to retry
+            send({
+              type: "provisioning_failed",
+              attempt: attempt + 1,
+              gpu: currentGpu,
+              error: result.error,
+              errorType: result.errorType,
+              willRetry: attempt < MAX_RETRIES - 1 && result.errorType === "out_of_stock",
+            });
+
+            // Only retry on out of stock errors
+            if (result.errorType !== "out_of_stock" || attempt >= MAX_RETRIES - 1) {
+              break;
+            }
+
+            // Ask the agent to decide what GPU to try next
+            const retryDecision = await decideGpuRetry(
+              specialistResult,
+              provisioningAttempts.map(a => ({
+                gpu: a.gpu,
+                vram: a.vram,
+                gpuCount: a.gpuCount,
+                error: a.error || "Unknown error",
+              }))
+            );
+
+            send({
+              type: "retry_decision",
+              thinking: retryDecision.thinking,
+              shouldRetry: retryDecision.should_retry,
+              nextGpu: retryDecision.next_gpu,
+              fallbackReason: retryDecision.fallback_reason,
+            });
+
+            if (!retryDecision.should_retry || !retryDecision.next_gpu) {
+              break;
+            }
+
+            // Update for next attempt
+            currentGpu = retryDecision.next_gpu;
+            currentVram = retryDecision.next_vram || currentVram;
+            currentCount = retryDecision.next_gpu_count || currentCount;
+          }
+
+          send({
+            type: "step_update",
+            step: {
+              id: "provision",
+              status: provisioningResult?.success ? "complete" : "error",
+              endTime: Date.now(),
+              data: {
+                provisioningAttempts,
+                provisionedWorkspace: provisioningResult?.workspaceName,
+              },
+            },
+          });
+        }
 
         // Send final result
         send({
@@ -381,8 +568,14 @@ Analyze these files thoroughly and provide your detailed compute requirements.`;
             success: !!best,
             match: { best, second_best },
             needs: specialistResult,
-            recommendation: matchReasoning,
+            recommendation: brokerThinking,
             brokerOutput: brokerResult,
+            provisioning: attemptProvisioning ? {
+              attempted: true,
+              success: provisioningResult?.success || false,
+              workspaceName: provisioningResult?.workspaceName,
+              attempts: provisioningAttempts,
+            } : undefined,
           },
         });
 

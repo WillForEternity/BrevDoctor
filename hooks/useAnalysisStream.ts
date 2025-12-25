@@ -3,6 +3,15 @@
 import { useState, useCallback } from "react";
 import type { RepoMeta, AgentStep, MatchResult, SpecialistOutput } from "@/types/agentSchemas";
 
+export interface GpuProvisioningAttempt {
+  gpu: string;
+  vram: number;
+  gpuCount: number;
+  success: boolean;
+  error?: string;
+  errorType?: string;
+}
+
 export interface StreamingAnalysisState {
   isStreaming: boolean;
   agentSteps: AgentStep[];
@@ -22,9 +31,35 @@ export interface StreamingAnalysisState {
   // Broker streaming
   brokerThinking: string;
   brokerRecommendedInstance: string | null;
+  brokerRecommendedVram: number | null;
+  brokerRecommendedCount: number | null;
   brokerAlternativeInstance: string | null;
   brokerConfidence: string | null;
   brokerCostNotes: string | null;
+  brokerStatus: "idle" | "starting" | "streaming" | "complete";
+  brokerUpdateCount: number;
+  // GPU Provisioning streaming
+  isProvisioning: boolean;
+  provisioningAttempt: {
+    gpu: string;
+    vram: number;
+    gpuCount: number;
+    attemptNumber: number;
+  } | null;
+  provisioningAttempts: GpuProvisioningAttempt[];
+  retryDecision: {
+    thinking: string;
+    shouldRetry: boolean;
+    nextGpu?: string;
+    fallbackReason?: string;
+  } | null;
+  provisioningResult: {
+    success: boolean;
+    workspaceName?: string;
+    gpu?: string;
+    vram?: number;
+    gpuCount?: number;
+  } | null;
   // Final result
   result: {
     success: boolean;
@@ -44,61 +79,52 @@ const initialSteps: AgentStep[] = [
   { id: "match", name: "Matching to GPU inventory", status: "pending" },
 ];
 
+const initialState: StreamingAnalysisState = {
+  isStreaming: false,
+  agentSteps: [],
+  scoutReasoning: "",
+  scoutSelectedFiles: [],
+  // Specialist
+  specialistThinking: "",
+  specialistVram: null,
+  specialistArch: null,
+  specialistMultiGpu: null,
+  specialistCommands: [],
+  specialistComplexity: null,
+  specialistComplexityReasoning: null,
+  specialistCpuCores: null,
+  specialistSystemRam: null,
+  specialistDiskSpace: null,
+  // Broker
+  brokerThinking: "",
+  brokerRecommendedInstance: null,
+  brokerRecommendedVram: null,
+  brokerRecommendedCount: null,
+  brokerAlternativeInstance: null,
+  brokerConfidence: null,
+  brokerCostNotes: null,
+  brokerStatus: "idle",
+  brokerUpdateCount: 0,
+  // GPU Provisioning
+  isProvisioning: false,
+  provisioningAttempt: null,
+  provisioningAttempts: [],
+  retryDecision: null,
+  provisioningResult: null,
+  // Result
+  result: null,
+  error: null,
+};
+
 export function useAnalysisStream() {
-  const [state, setState] = useState<StreamingAnalysisState>({
-    isStreaming: false,
-    agentSteps: [],
-    scoutReasoning: "",
-    scoutSelectedFiles: [],
-    // Specialist
-    specialistThinking: "",
-    specialistVram: null,
-    specialistArch: null,
-    specialistMultiGpu: null,
-    specialistCommands: [],
-    specialistComplexity: null,
-    specialistComplexityReasoning: null,
-    specialistCpuCores: null,
-    specialistSystemRam: null,
-    specialistDiskSpace: null,
-    // Broker
-    brokerThinking: "",
-    brokerRecommendedInstance: null,
-    brokerAlternativeInstance: null,
-    brokerConfidence: null,
-    brokerCostNotes: null,
-    // Result
-    result: null,
-    error: null,
-  });
+  const [state, setState] = useState<StreamingAnalysisState>(initialState);
 
   const startAnalysis = useCallback(async (repoMeta: RepoMeta, userFeedback?: string, previousNeeds?: SpecialistOutput) => {
     // Reset state and initialize steps
     setState({
+      ...initialState,
       isStreaming: true,
       agentSteps: initialSteps.map((s) => ({ ...s })),
-      scoutReasoning: "",
-      scoutSelectedFiles: [],
-      // Specialist
-      specialistThinking: "",
-      specialistVram: null,
-      specialistArch: null,
-      specialistMultiGpu: null,
-      specialistCommands: [],
-      specialistComplexity: null,
-      specialistComplexityReasoning: null,
-      specialistCpuCores: null,
-      specialistSystemRam: null,
-      specialistDiskSpace: null,
-      // Broker
-      brokerThinking: "",
-      brokerRecommendedInstance: null,
-      brokerAlternativeInstance: null,
-      brokerConfidence: null,
-      brokerCostNotes: null,
-      // Result
-      result: null,
-      error: null,
     });
 
     try {
@@ -162,32 +188,7 @@ export function useAnalysisStream() {
   }, []);
 
   const reset = useCallback(() => {
-    setState({
-      isStreaming: false,
-      agentSteps: [],
-      scoutReasoning: "",
-      scoutSelectedFiles: [],
-      // Specialist
-      specialistThinking: "",
-      specialistVram: null,
-      specialistArch: null,
-      specialistMultiGpu: null,
-      specialistCommands: [],
-      specialistComplexity: null,
-      specialistComplexityReasoning: null,
-      specialistCpuCores: null,
-      specialistSystemRam: null,
-      specialistDiskSpace: null,
-      // Broker
-      brokerThinking: "",
-      brokerRecommendedInstance: null,
-      brokerAlternativeInstance: null,
-      brokerConfidence: null,
-      brokerCostNotes: null,
-      // Result
-      result: null,
-      error: null,
-    });
+    setState(initialState);
   }, []);
 
   return { state, startAnalysis, reset };
@@ -247,10 +248,80 @@ function handleStreamEvent(
       setState((prev) => ({
         ...prev,
         brokerThinking: (data.thinking as string) ?? prev.brokerThinking,
-        brokerRecommendedInstance: (data.recommendedInstance as string) ?? prev.brokerRecommendedInstance,
-        brokerAlternativeInstance: (data.alternativeInstance as string) ?? prev.brokerAlternativeInstance,
+        brokerRecommendedInstance: (data.recommendedGpu as string) ?? (data.recommendedInstance as string) ?? prev.brokerRecommendedInstance,
+        brokerRecommendedVram: (data.recommendedVram as number) ?? prev.brokerRecommendedVram,
+        brokerRecommendedCount: (data.gpuCount as number) ?? prev.brokerRecommendedCount,
+        brokerAlternativeInstance: (data.alternativeGpu as string) ?? (data.alternativeInstance as string) ?? prev.brokerAlternativeInstance,
         brokerConfidence: (data.matchConfidence as string) ?? prev.brokerConfidence,
         brokerCostNotes: (data.costNotes as string) ?? prev.brokerCostNotes,
+        brokerStatus: (data.status as "idle" | "starting" | "streaming" | "complete") ?? prev.brokerStatus,
+        brokerUpdateCount: (data.updateCount as number) ?? prev.brokerUpdateCount,
+      }));
+      break;
+
+    case "provisioning_attempt":
+      setState((prev) => ({
+        ...prev,
+        isProvisioning: true,
+        provisioningAttempt: {
+          gpu: data.gpu as string,
+          vram: data.vram as number,
+          gpuCount: data.gpuCount as number,
+          attemptNumber: data.attempt as number,
+        },
+      }));
+      break;
+
+    case "provisioning_failed":
+      setState((prev) => ({
+        ...prev,
+        provisioningAttempts: [
+          ...prev.provisioningAttempts,
+          {
+            gpu: data.gpu as string,
+            vram: prev.provisioningAttempt?.vram || 0,
+            gpuCount: prev.provisioningAttempt?.gpuCount || 1,
+            success: false,
+            error: data.error as string,
+            errorType: data.errorType as string,
+          },
+        ],
+        isProvisioning: data.willRetry as boolean,
+      }));
+      break;
+
+    case "provisioning_success":
+      setState((prev) => ({
+        ...prev,
+        isProvisioning: false,
+        provisioningAttempts: [
+          ...prev.provisioningAttempts,
+          {
+            gpu: data.gpu as string,
+            vram: data.vram as number,
+            gpuCount: data.gpuCount as number,
+            success: true,
+          },
+        ],
+        provisioningResult: {
+          success: true,
+          workspaceName: data.workspaceName as string,
+          gpu: data.gpu as string,
+          vram: data.vram as number,
+          gpuCount: data.gpuCount as number,
+        },
+      }));
+      break;
+
+    case "retry_decision":
+      setState((prev) => ({
+        ...prev,
+        retryDecision: {
+          thinking: data.thinking as string,
+          shouldRetry: data.shouldRetry as boolean,
+          nextGpu: data.nextGpu as string | undefined,
+          fallbackReason: data.fallbackReason as string | undefined,
+        },
       }));
       break;
 

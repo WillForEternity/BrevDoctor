@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { SpecialistOutputSchema, type SpecialistOutput } from "@/types/agentSchemas";
+import { getGpuCatalogDescription } from "@/lib/brev-api";
 
 export async function analyzeComputeNeeds(
   fileContents: Record<string, string>,
@@ -11,7 +12,12 @@ export async function analyzeComputeNeeds(
     .map(([name, content]) => `--- ${name} ---\n${content}`)
     .join("\n\n");
 
+  const gpuCatalog = getGpuCatalogDescription();
+
   let prompt = `You are an NVIDIA Solutions Architect specializing in ML/AI workloads. Your job is to analyze code and provide comprehensive GPU compute recommendations.
+
+## AVAILABLE GPU OPTIONS (for context)
+${gpuCatalog}
 
 ## YOUR TASK
 Analyze the provided code files and determine the exact compute requirements. You MUST show your detailed thinking process.

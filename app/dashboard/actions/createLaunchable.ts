@@ -3,16 +3,17 @@
 import { auth } from "@/lib/auth";
 import { scoutRepo } from "@/lib/scout";
 import { analyzeComputeNeeds } from "@/lib/specialist";
-import { getBrevInventory } from "@/lib/brev-api";
-import { findBestInstance, generateRecommendationSummary } from "@/lib/broker";
+import { getBrevInventory, getGpuByName, getGpuCatalogDescription, attemptGpuProvisioning } from "@/lib/brev-api";
+import { findBestInstance, generateRecommendationSummary, selectGpuInstance, decideGpuRetry, brokerOutputToInstance } from "@/lib/broker";
 import { createPR, getRepoTree, getMultipleFileContents } from "@/lib/github";
-import type { RepoMeta, MatchResult, SpecialistOutput, BrevInstance, AgentStep } from "@/types/agentSchemas";
+import type { RepoMeta, MatchResult, SpecialistOutput, BrevInstance, AgentStep, BrokerOutput } from "@/types/agentSchemas";
 
 export interface AnalysisResult {
   success: boolean;
   recommendation?: string;
   match?: MatchResult;
   needs?: SpecialistOutput;
+  brokerOutput?: BrokerOutput;
   error?: string;
   repoMeta?: RepoMeta;
   agentSteps: AgentStep[];
@@ -29,15 +30,36 @@ export interface LaunchableResult {
   agentSteps: AgentStep[];
 }
 
+export interface ProvisioningResult {
+  success: boolean;
+  workspaceName?: string;
+  gpu?: string;
+  vram?: number;
+  gpuCount?: number;
+  attempts: Array<{
+    gpu: string;
+    vram: number;
+    gpuCount: number;
+    success: boolean;
+    error?: string;
+  }>;
+  error?: string;
+}
+
 // Step 1: Analyze repository and get GPU recommendation (without creating PR)
-export async function analyzeRepository(repoMeta: RepoMeta, userFeedback?: string, previousNeeds?: SpecialistOutput, feedbackHistory?: string[]): Promise<AnalysisResult> {
+export async function analyzeRepository(
+  repoMeta: RepoMeta, 
+  userFeedback?: string, 
+  previousNeeds?: SpecialistOutput, 
+  feedbackHistory?: string[]
+): Promise<AnalysisResult> {
   const agentSteps: AgentStep[] = [
     { id: "auth", name: "Authenticating with GitHub", status: "pending" },
     { id: "scan", name: "Scanning repository structure", status: "pending" },
     { id: "scout", name: "Scout AI selecting key files", status: "pending" },
     { id: "fetch", name: "Fetching file contents", status: "pending" },
     { id: "analyze", name: "Specialist analyzing compute needs", status: "pending" },
-    { id: "match", name: "Matching to GPU inventory", status: "pending" },
+    { id: "match", name: "Selecting optimal GPU from catalog", status: "pending" },
   ];
 
   const updateStep = (id: string, updates: Partial<AgentStep>) => {
@@ -141,26 +163,64 @@ export async function analyzeRepository(repoMeta: RepoMeta, userFeedback?: strin
           architecture: needs.recommended_gpu_architecture,
           multiGpu: needs.requires_multi_gpu,
           setupCommands: needs.setup_commands,
+          complexity: needs.project_complexity,
+          complexityReasoning: needs.complexity_reasoning,
+          cpuCores: needs.recommended_cpu_cores,
+          systemRam: needs.recommended_system_ram_gb,
+          diskSpace: needs.estimated_disk_space_gb,
         }
       }
     });
 
-    // Step 6: Broker finds best GPU match
+    // Step 6: Broker selects optimal GPU using full catalog knowledge
     updateStep("match", { status: "running", startTime: Date.now() });
-    const inventory = await getBrevInventory();
-    const match = findBestInstance(needs, inventory);
-    const recommendation = generateRecommendationSummary(needs, match);
     
-    const matchReasoning = match.best 
-      ? `Searched Brev.dev inventory (${inventory.length} GPU configurations available).\n\nSelected: ${match.best.name}\n• VRAM: ${match.best.vram}GB${match.best.count > 1 ? ` × ${match.best.count} GPUs = ${match.best.vram * match.best.count}GB total` : ""}\n• Architecture: ${match.best.arch}\n• Price: $${match.best.price.toFixed(2)}/hour\n\nThis GPU meets your ${needs.estimated_vram_gb}GB VRAM requirement and supports the ${needs.recommended_gpu_architecture} architecture needed for your workload.${match.second_best ? `\n\nAlternative: ${match.second_best.name} (${match.second_best.vram}GB, $${match.second_best.price.toFixed(2)}/hr)` : ''}`
-      : `Searched Brev.dev inventory (${inventory.length} GPU configurations) but could not find a suitable match for ${needs.estimated_vram_gb}GB VRAM requirement with ${needs.recommended_gpu_architecture} architecture.`;
+    // Use LLM-based selection with the complete GPU catalog
+    const brokerOutput = await selectGpuInstance(needs);
+    
+    // Convert to BrevInstance for compatibility
+    const recommendedInstance = getGpuByName(brokerOutput.recommended_gpu);
+    const alternativeInstance = brokerOutput.alternative_gpu 
+      ? getGpuByName(brokerOutput.alternative_gpu) 
+      : null;
+
+    const best = recommendedInstance ? {
+      ...recommendedInstance,
+      count: brokerOutput.gpu_count,
+    } : null;
+
+    const second_best = alternativeInstance ? {
+      ...alternativeInstance,
+      count: brokerOutput.gpu_count,
+    } : null;
+
+    const match: MatchResult = { best, second_best };
+    
+    // Generate recommendation summary
+    let recommendation = brokerOutput.thinking;
+    if (best) {
+      recommendation += `\n\n**Selected GPU: ${best.name}${best.count > 1 ? ` × ${best.count}` : ''}**\n`;
+      recommendation += `• VRAM: ${best.vram}GB${best.count > 1 ? ` × ${best.count} = ${best.vram * best.count}GB total` : ''}\n`;
+      recommendation += `• Architecture: ${best.arch}\n`;
+      recommendation += `• Price: $${best.price.toFixed(2)}/hour\n`;
+      recommendation += `• Confidence: ${brokerOutput.match_confidence}\n`;
+      if (brokerOutput.cost_optimization_notes) {
+        recommendation += `\n**Cost Notes:** ${brokerOutput.cost_optimization_notes}`;
+      }
+      if (second_best) {
+        recommendation += `\n\n**Alternative (if out of stock):** ${second_best.name} (${second_best.vram}GB)`;
+      }
+    }
     
     updateStep("match", { 
       status: "complete", 
       endTime: Date.now(),
       data: {
-        inventoryChecked: inventory.length,
-        matchReasoning: matchReasoning,
+        inventoryChecked: getBrevInventory().length,
+        matchReasoning: recommendation,
+        brokerThinking: brokerOutput.thinking,
+        matchConfidence: brokerOutput.match_confidence,
+        costNotes: brokerOutput.cost_optimization_notes,
       }
     });
 
@@ -171,6 +231,7 @@ export async function analyzeRepository(repoMeta: RepoMeta, userFeedback?: strin
         recommendation,
         needs,
         match,
+        brokerOutput,
         agentSteps,
         feedbackHistory: feedbackHistory || [],
       };
@@ -181,6 +242,7 @@ export async function analyzeRepository(repoMeta: RepoMeta, userFeedback?: strin
       recommendation,
       match,
       needs,
+      brokerOutput,
       repoMeta,
       agentSteps,
       feedbackHistory: feedbackHistory || [],
@@ -196,7 +258,74 @@ export async function analyzeRepository(repoMeta: RepoMeta, userFeedback?: strin
   }
 }
 
-// Step 2: Create PR after user confirms the recommendation
+// Step 2: Attempt to provision the GPU (with retry logic)
+export async function provisionGpu(
+  needs: SpecialistOutput,
+  brokerOutput: BrokerOutput
+): Promise<ProvisioningResult> {
+  const MAX_RETRIES = 3;
+  const attempts: ProvisioningResult["attempts"] = [];
+  
+  let currentGpu = brokerOutput.recommended_gpu;
+  let currentVram = brokerOutput.recommended_vram;
+  let currentCount = brokerOutput.gpu_count;
+  
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const result = await attemptGpuProvisioning(currentGpu, currentCount);
+    
+    attempts.push({
+      gpu: currentGpu,
+      vram: currentVram,
+      gpuCount: currentCount,
+      success: result.success,
+      error: result.error,
+    });
+    
+    if (result.success) {
+      return {
+        success: true,
+        workspaceName: result.workspaceName,
+        gpu: currentGpu,
+        vram: currentVram,
+        gpuCount: currentCount,
+        attempts,
+      };
+    }
+    
+    // Only retry on out of stock errors
+    if (result.errorType !== "out_of_stock" || attempt >= MAX_RETRIES - 1) {
+      break;
+    }
+    
+    // Ask the agent to decide what GPU to try next
+    const retryDecision = await decideGpuRetry(
+      needs,
+      attempts.map(a => ({
+        gpu: a.gpu,
+        vram: a.vram,
+        gpuCount: a.gpuCount,
+        error: a.error || "Unknown error",
+      }))
+    );
+    
+    if (!retryDecision.should_retry || !retryDecision.next_gpu) {
+      break;
+    }
+    
+    // Update for next attempt
+    currentGpu = retryDecision.next_gpu;
+    currentVram = retryDecision.next_vram || currentVram;
+    currentCount = retryDecision.next_gpu_count || currentCount;
+  }
+  
+  return {
+    success: false,
+    attempts,
+    error: `Failed to provision GPU after ${attempts.length} attempts`,
+  };
+}
+
+// Step 3: Create PR after user confirms the recommendation
 export async function confirmAndCreatePR(
   repoMeta: RepoMeta,
   needs: SpecialistOutput,
@@ -313,10 +442,14 @@ version: "1.0"
 compute:
   gpu: ${instance.name}
   gpuCount: ${instance.count}
+  vram: ${instance.vram}GB
+  architecture: ${instance.arch}
   
-environment:
-  architecture: ${needs.recommended_gpu_architecture}
+requirements:
   estimatedVram: ${needs.estimated_vram_gb}GB
+  cpuCores: ${needs.recommended_cpu_cores}
+  systemRam: ${needs.recommended_system_ram_gb}GB
+  diskSpace: ${needs.estimated_disk_space_gb}GB
 
 setup:
   script: .brev/setup.sh

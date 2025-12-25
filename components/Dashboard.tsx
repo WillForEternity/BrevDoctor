@@ -315,9 +315,18 @@ export function Dashboard() {
                       specialistDiskSpace: streamState.specialistDiskSpace,
                       brokerThinking: streamState.brokerThinking,
                       brokerRecommendedInstance: streamState.brokerRecommendedInstance,
+                      brokerRecommendedVram: streamState.brokerRecommendedVram,
+                      brokerRecommendedCount: streamState.brokerRecommendedCount,
                       brokerAlternativeInstance: streamState.brokerAlternativeInstance,
                       brokerConfidence: streamState.brokerConfidence,
                       brokerCostNotes: streamState.brokerCostNotes,
+                      brokerStatus: streamState.brokerStatus,
+                      brokerUpdateCount: streamState.brokerUpdateCount,
+                      isProvisioning: streamState.isProvisioning,
+                      provisioningAttempt: streamState.provisioningAttempt,
+                      provisioningAttempts: streamState.provisioningAttempts,
+                      retryDecision: streamState.retryDecision,
+                      provisioningResult: streamState.provisioningResult,
                     }}
                   />
                 </div>
@@ -349,7 +358,7 @@ export function Dashboard() {
                     onConfirm={handleConfirmPR} 
                     onDeny={handleDenyPR}
                     onReject={handleRejectAndFeedback}
-                    isCreatingPR={dashboardState === "creating_pr"}
+                    isCreatingPR={false}
                   />
                 </div>
               </div>
@@ -401,9 +410,18 @@ export function Dashboard() {
                       specialistDiskSpace: streamState.specialistDiskSpace,
                       brokerThinking: streamState.brokerThinking,
                       brokerRecommendedInstance: streamState.brokerRecommendedInstance,
+                      brokerRecommendedVram: streamState.brokerRecommendedVram,
+                      brokerRecommendedCount: streamState.brokerRecommendedCount,
                       brokerAlternativeInstance: streamState.brokerAlternativeInstance,
                       brokerConfidence: streamState.brokerConfidence,
                       brokerCostNotes: streamState.brokerCostNotes,
+                      brokerStatus: streamState.brokerStatus,
+                      brokerUpdateCount: streamState.brokerUpdateCount,
+                      isProvisioning: streamState.isProvisioning,
+                      provisioningAttempt: streamState.provisioningAttempt,
+                      provisioningAttempts: streamState.provisioningAttempts,
+                      retryDecision: streamState.retryDecision,
+                      provisioningResult: streamState.provisioningResult,
                     }}
                   />
                 </div>

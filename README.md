@@ -23,6 +23,8 @@ AI-powered GPU provisioning tool that analyzes your ML repository and automatica
 - Node.js 18+ or Bun
 - GitHub OAuth App credentials
 - OpenAI API key
+- Brev CLI installed (optional - for automatic GPU provisioning)
+- Brev account and token (optional - for automatic GPU provisioning)
 
 ### Setup
 
@@ -58,6 +60,9 @@ NEXTAUTH_SECRET=your_nextauth_secret_generate_with_openssl_rand_base64_32
 
 # OpenAI API Key
 OPENAI_API_KEY=your_openai_api_key
+
+# Brev Token (Optional - for automatic GPU provisioning)
+BREV_TOKEN=your_brev_auth_token
 ```
 
 4. Run the development server:
@@ -67,6 +72,83 @@ bun dev
 ```
 
 5. Open [http://localhost:3000](http://localhost:3000)
+
+### Getting a Brev Token (for GPU Provisioning)
+
+If you want the app to automatically provision GPUs via Brev CLI, you'll need a Brev authentication token:
+
+#### Option 1: Login via Brev CLI (Recommended)
+
+1. **Install Brev CLI**:
+
+```bash
+# macOS/Linux
+curl -fsSL https://brev.sh/install.sh | bash
+
+# Or with Homebrew
+brew install brevdev/tap/brev
+```
+
+2. **Login to Brev**:
+
+```bash
+brev login
+```
+
+This will open your browser for authentication.
+
+3. **Extract your token**:
+
+After logging in, Brev stores your auth token. You can find it in:
+- **macOS/Linux**: `~/.brev/credentials.json`
+
+```bash
+cat ~/.brev/credentials.json
+```
+
+Look for the `token` field and copy its value.
+
+4. **Add to `.env.local`**:
+
+```env
+BREV_TOKEN=your_token_here
+```
+
+#### Option 2: Get Token from Brev Console
+
+1. Go to [console.brev.dev](https://console.brev.dev) or [brev.nvidia.com](https://brev.nvidia.com)
+2. Sign in to your Brev account
+3. Navigate to **Settings** → **API Tokens** or **Developer Settings**
+4. Generate a new token or copy your existing token
+5. Add it to your `.env.local` file
+
+**Note**: Brev tokens typically expire after 1 hour. The CLI will handle re-authentication automatically, but if you're using a manual token, you may need to refresh it periodically.
+
+**Automatic Token Refresh**: Brev Doctor automatically detects expired tokens and refreshes them using the Brev CLI's refresh mechanism. You don't need to manually update the token - the app will:
+- Check token expiration before each API call
+- Automatically refresh if expired or expiring within 5 minutes
+- Fall back to reading fresh tokens from `~/.brev/credentials.json`
+- Retry failed operations with refreshed tokens
+
+#### How Provisioning Works
+
+With `BREV_TOKEN` configured, Brev Doctor can:
+
+1. **Automatically provision GPUs** after analysis
+2. **Retry with alternatives** if a GPU is out of stock
+3. **Report real-time availability** based on actual provisioning attempts
+
+The agent is given the full list of available Brev GPUs:
+- **Blackwell**: B300, B200 (192GB)
+- **Hopper**: H200 (141GB), H100 (80GB)  
+- **Ampere**: A100, A40, A10, A10G, A6000, A5000, A4000, A16
+- **Ada Lovelace**: L40s, L40, L4, RTX 6000/4000 Ada
+- **Turing**: T4
+- **Volta**: V100
+- **Pascal**: P4
+- **Maxwell**: M60
+
+If provisioning fails (e.g., GPU out of stock), the agent intelligently selects an alternative GPU and retries.
 
 ## Project Structure
 

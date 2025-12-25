@@ -17,11 +17,11 @@ export function RepoConfirmation({
 }: RepoConfirmationProps) {
   return (
     <div className="w-full max-w-2xl">
-      <div className="rounded-2xl p-8 backdrop-blur-sm bg-gradient-to-br from-blue-500/10 to-cyan-500/10 border border-blue-500/30">
+      <div className="rounded-2xl p-8 bg-zinc-900/50 border border-zinc-800">
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 rounded-full bg-blue-500/20 flex items-center justify-center">
-            <svg className="w-6 h-6 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="w-12 h-12 rounded-xl bg-zinc-800 flex items-center justify-center">
+            <svg className="w-6 h-6 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </div>
@@ -32,7 +32,7 @@ export function RepoConfirmation({
         </div>
 
         {/* Repository info */}
-        <div className="mb-6 p-5 rounded-xl bg-zinc-900/80 border border-blue-500/20">
+        <div className="mb-6 p-5 rounded-xl bg-zinc-900/80 border border-zinc-700">
           <div className="flex items-start gap-4">
             <div className="w-12 h-12 rounded-lg bg-zinc-800 flex items-center justify-center flex-shrink-0">
               <svg className="w-6 h-6 text-zinc-400" fill="currentColor" viewBox="0 0 24 24">
@@ -40,7 +40,7 @@ export function RepoConfirmation({
               </svg>
             </div>
             <div className="flex-1">
-              <h4 className="text-lg font-semibold text-zinc-100 mb-1">
+              <h4 className="text-lg font-semibold text-zinc-200 mb-1">
                 {repoOwner}/{repoName}
               </h4>
               {repoDescription && (
@@ -54,19 +54,32 @@ export function RepoConfirmation({
 
         {/* What will happen */}
         <div className="mb-6 p-4 rounded-lg bg-zinc-900/50 border border-zinc-700/50">
-          <h4 className="text-sm font-semibold text-zinc-300 mb-3">What the AI will do:</h4>
-          <div className="space-y-2">
-            {[
-              { icon: "🔍", text: "Scan repository structure and files" },
-              { icon: "🧠", text: "Analyze ML/AI code and dependencies" },
-              { icon: "📊", text: "Estimate GPU compute requirements" },
-              { icon: "🎯", text: "Match to optimal Brev GPU instances" },
-            ].map((item, i) => (
-              <div key={i} className="flex items-center gap-3 text-sm text-zinc-400">
-                <span className="text-lg">{item.icon}</span>
-                <span>{item.text}</span>
-              </div>
-            ))}
+          <h4 className="text-sm font-medium text-zinc-300 mb-3">What the AI will do:</h4>
+          <div className="space-y-2.5">
+            <div className="flex items-center gap-3 text-sm text-zinc-400">
+              <svg className="w-4 h-4 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <span>Scan repository structure and files</span>
+            </div>
+            <div className="flex items-center gap-3 text-sm text-zinc-400">
+              <svg className="w-4 h-4 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              <span>Analyze ML/AI code and dependencies</span>
+            </div>
+            <div className="flex items-center gap-3 text-sm text-zinc-400">
+              <svg className="w-4 h-4 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              <span>Estimate GPU compute requirements</span>
+            </div>
+            <div className="flex items-center gap-3 text-sm text-zinc-400">
+              <svg className="w-4 h-4 text-zinc-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>Match to optimal Brev GPU instances</span>
+            </div>
           </div>
         </div>
 
@@ -74,7 +87,7 @@ export function RepoConfirmation({
         <div className="flex gap-3">
           <button
             onClick={onConfirm}
-            className="flex-1 px-6 py-3 rounded-lg bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-medium transition-all duration-300 shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40"
+            className="flex-1 px-6 py-3 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-medium transition-all duration-300 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30"
           >
             <span className="flex items-center justify-center gap-2">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -94,4 +107,3 @@ export function RepoConfirmation({
     </div>
   );
 }
-

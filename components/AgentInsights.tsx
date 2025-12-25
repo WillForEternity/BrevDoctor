@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import type { AgentStep } from "@/types/agentSchemas";
+import { GpuProvisioningVisual } from "./GpuProvisioningVisual";
+import type { GpuProvisioningAttempt } from "@/hooks/useAnalysisStream";
 
 interface AgentInsightsProps {
   steps: AgentStep[];
@@ -22,9 +24,35 @@ interface AgentInsightsProps {
     // Broker streaming
     brokerThinking?: string;
     brokerRecommendedInstance?: string | null;
+    brokerRecommendedVram?: number | null;
+    brokerRecommendedCount?: number | null;
     brokerAlternativeInstance?: string | null;
     brokerConfidence?: string | null;
     brokerCostNotes?: string | null;
+    brokerStatus?: "idle" | "starting" | "streaming" | "complete";
+    brokerUpdateCount?: number;
+    // GPU Provisioning streaming
+    isProvisioning?: boolean;
+    provisioningAttempt?: {
+      gpu: string;
+      vram: number;
+      gpuCount: number;
+      attemptNumber: number;
+    } | null;
+    provisioningAttempts?: GpuProvisioningAttempt[];
+    retryDecision?: {
+      thinking: string;
+      shouldRetry: boolean;
+      nextGpu?: string;
+      fallbackReason?: string;
+    } | null;
+    provisioningResult?: {
+      success: boolean;
+      workspaceName?: string;
+      gpu?: string;
+      vram?: number;
+      gpuCount?: number;
+    } | null;
   };
   className?: string;
 }
@@ -49,15 +77,43 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
   }, [streamingData?.scoutReasoning, streamingData?.specialistThinking, streamingData?.brokerThinking]);
 
   const getStepIcon = (step: AgentStep) => {
-    const icons: Record<string, string> = {
-      auth: "🔐",
-      scan: "📂",
-      scout: "🔍",
-      fetch: "📄",
-      analyze: "🧠",
-      match: "🎯",
+    const iconMap: Record<string, React.ReactNode> = {
+      auth: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+        </svg>
+      ),
+      scan: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        </svg>
+      ),
+      scout: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+      ),
+      fetch: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        </svg>
+      ),
+      analyze: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+        </svg>
+      ),
+      match: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      ),
     };
-    return icons[step.id] || "⚡";
+    return iconMap[step.id] || (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+    );
   };
 
   const getStepDuration = (step: AgentStep) => {
@@ -71,8 +127,8 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
     <div className={`w-full max-w-4xl ${className}`}>
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
-          <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="w-10 h-10 rounded-xl bg-zinc-800 flex items-center justify-center">
+          <svg className="w-5 h-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
           </svg>
         </div>
@@ -89,7 +145,7 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
             key={step.id}
             className={`relative rounded-xl border transition-all duration-300 overflow-hidden ${
               step.status === "running"
-                ? "bg-gradient-to-r from-violet-500/10 to-purple-500/10 border-violet-500/40 shadow-lg shadow-violet-500/10"
+                ? "bg-zinc-900/50 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
                 : step.status === "complete"
                 ? "bg-zinc-900/50 border-zinc-700/50 hover:border-zinc-600/50"
                 : step.status === "error"
@@ -114,7 +170,7 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
                   <div className="w-5 h-5 rounded-full border-2 border-zinc-600" />
                 )}
                 {step.status === "running" && (
-                  <div className="w-5 h-5 rounded-full border-2 border-violet-500 border-t-transparent animate-spin" />
+                  <div className="w-5 h-5 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
                 )}
                 {step.status === "complete" && (
                   <div className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center">
@@ -136,7 +192,7 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className={`font-medium ${
-                    step.status === "running" ? "text-violet-300" :
+                    step.status === "running" ? "text-emerald-300" :
                     step.status === "complete" ? "text-zinc-200" :
                     step.status === "error" ? "text-red-300" :
                     "text-zinc-500"
@@ -191,7 +247,7 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
             {/* Running indicator bar */}
             {step.status === "running" && (
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-zinc-800 overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-violet-500 to-purple-500 animate-pulse" style={{ width: "100%" }} />
+                <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500 animate-pulse" style={{ width: "100%" }} />
               </div>
             )}
           </div>
@@ -216,18 +272,18 @@ function StreamingStepContent({
         {/* Live reasoning stream */}
         <div>
           <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-violet-500 animate-pulse" />
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             Scout AI Thinking...
           </h4>
           <div
             ref={thinkingRef}
-            className="bg-gradient-to-br from-violet-500/5 to-purple-500/5 border border-violet-500/20 rounded-lg p-4 max-h-48 overflow-y-auto"
+            className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-48 overflow-y-auto"
           >
             <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
               {streamingData.scoutReasoning || (
                 <span className="text-zinc-500 italic">Analyzing file structure...</span>
               )}
-              <span className="inline-block w-2 h-4 bg-violet-400 animate-pulse ml-1" />
+              <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
             </p>
           </div>
         </div>
@@ -261,18 +317,18 @@ function StreamingStepContent({
         {/* Specialist Thinking Stream */}
         <div>
           <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             Specialist Deep Analysis...
           </h4>
           <div
             ref={thinkingRef}
-            className="bg-gradient-to-br from-amber-500/5 to-orange-500/5 border border-amber-500/20 rounded-lg p-4 max-h-64 overflow-y-auto"
+            className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto"
           >
             <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-mono">
               {streamingData.specialistThinking || (
                 <span className="text-zinc-500 italic">Analyzing model architecture, dependencies, and compute requirements...</span>
               )}
-              <span className="inline-block w-2 h-4 bg-amber-400 animate-pulse ml-1" />
+              <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
             </p>
           </div>
         </div>
@@ -282,10 +338,10 @@ function StreamingStepContent({
           <div className="flex items-center gap-3">
             <span className="text-xs text-zinc-500">Complexity:</span>
             <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-              streamingData.specialistComplexity === "Enterprise" ? "bg-purple-500 text-white" :
-              streamingData.specialistComplexity === "High" ? "bg-red-500 text-white" :
-              streamingData.specialistComplexity === "Medium" ? "bg-amber-500 text-zinc-900" :
-              "bg-emerald-500 text-zinc-900"
+              streamingData.specialistComplexity === "Enterprise" ? "bg-zinc-700 text-zinc-200" :
+              streamingData.specialistComplexity === "High" ? "bg-zinc-700 text-zinc-200" :
+              streamingData.specialistComplexity === "Medium" ? "bg-zinc-700 text-zinc-200" :
+              "bg-zinc-700 text-zinc-200"
             }`}>
               {streamingData.specialistComplexity}
             </span>
@@ -296,13 +352,13 @@ function StreamingStepContent({
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-zinc-950 rounded-lg p-3">
             <p className="text-xs text-zinc-500 mb-1">VRAM</p>
-            <p className={`text-lg font-semibold ${streamingData.specialistVram ? "text-amber-400" : "text-zinc-600"}`}>
+            <p className={`text-lg font-semibold ${streamingData.specialistVram ? "text-zinc-200" : "text-zinc-600"}`}>
               {streamingData.specialistVram ? `${streamingData.specialistVram}GB` : "..."}
             </p>
           </div>
           <div className="bg-zinc-950 rounded-lg p-3">
             <p className="text-xs text-zinc-500 mb-1">Architecture</p>
-            <p className={`text-lg font-semibold ${streamingData.specialistArch ? "text-cyan-400" : "text-zinc-600"}`}>
+            <p className={`text-lg font-semibold ${streamingData.specialistArch ? "text-zinc-200" : "text-zinc-600"}`}>
               {streamingData.specialistArch || "..."}
             </p>
           </div>
@@ -338,57 +394,89 @@ function StreamingStepContent({
   }
 
   if (step.id === "match" && streamingData) {
+    // Check if we're in provisioning mode
+    const isProvisioning = streamingData.isProvisioning || false;
+    const hasProvisioningData = streamingData.provisioningAttempts && streamingData.provisioningAttempts.length > 0;
+    const brokerStatus = streamingData.brokerStatus || "idle";
+    const updateCount = streamingData.brokerUpdateCount || 0;
+
     return (
       <div className="mt-4 space-y-4">
+        {/* Broker Status Header */}
+        {!isProvisioning && !hasProvisioningData && (
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${
+                brokerStatus === "complete" ? "bg-emerald-500" : "bg-emerald-500 animate-pulse"
+              }`} />
+              {brokerStatus === "starting" && "Initializing GPU Selection..."}
+              {brokerStatus === "streaming" && "AI Evaluating GPU Options..."}
+              {brokerStatus === "complete" && "GPU Selection Complete"}
+              {brokerStatus === "idle" && "Waiting to start..."}
+            </h4>
+            {updateCount > 0 && brokerStatus === "streaming" && (
+              <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-0.5 rounded-full">
+                {updateCount} updates
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Broker Thinking Stream */}
-        <div>
-          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Broker Evaluating GPU Options...
-          </h4>
-          <div
-            ref={thinkingRef}
-            className="bg-gradient-to-br from-emerald-500/5 to-teal-500/5 border border-emerald-500/20 rounded-lg p-4 max-h-64 overflow-y-auto"
-          >
-            <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
-              {streamingData.brokerThinking || (
-                <span className="text-zinc-500 italic">Analyzing inventory and matching to requirements...</span>
-              )}
-              <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
-            </p>
+        {!isProvisioning && !hasProvisioningData && (
+          <div>
+            <div
+              ref={thinkingRef}
+              className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto"
+            >
+              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                {streamingData.brokerThinking || (
+                  <span className="text-zinc-500 italic flex items-center gap-2">
+                    <span className="inline-block w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                    Analyzing inventory and matching to requirements...
+                  </span>
+                )}
+                {brokerStatus !== "complete" && streamingData.brokerThinking && (
+                  <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
+                )}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Live recommendation */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-zinc-950 rounded-lg p-3">
-            <p className="text-xs text-zinc-500 mb-1">Recommended</p>
-            <p className={`text-lg font-semibold ${streamingData.brokerRecommendedInstance ? "text-emerald-400" : "text-zinc-600"}`}>
-              {streamingData.brokerRecommendedInstance || "Evaluating..."}
-            </p>
-          </div>
-          <div className="bg-zinc-950 rounded-lg p-3">
-            <p className="text-xs text-zinc-500 mb-1">Alternative</p>
-            <p className={`text-lg font-semibold ${streamingData.brokerAlternativeInstance ? "text-zinc-300" : "text-zinc-600"}`}>
-              {streamingData.brokerAlternativeInstance || "—"}
-            </p>
-          </div>
-          <div className="bg-zinc-950 rounded-lg p-3 col-span-2">
-            <p className="text-xs text-zinc-500 mb-1">Confidence</p>
-            <p className={`text-lg font-semibold ${
-              streamingData.brokerConfidence === "High" ? "text-emerald-400" :
-              streamingData.brokerConfidence === "Medium" ? "text-amber-400" :
-              streamingData.brokerConfidence === "Low" ? "text-red-400" :
-              "text-zinc-600"
-            }`}>
-              {streamingData.brokerConfidence || "Calculating..."}
-            </p>
-          </div>
-        </div>
+        {/* GPU Selection Card */}
+        {streamingData.brokerRecommendedInstance && !isProvisioning && !hasProvisioningData && (
+          <GpuSelectionCard
+            gpu={streamingData.brokerRecommendedInstance}
+            vram={streamingData.brokerRecommendedVram || undefined}
+            gpuCount={streamingData.brokerRecommendedCount || 1}
+            alternative={streamingData.brokerAlternativeInstance || undefined}
+            confidence={streamingData.brokerConfidence || undefined}
+            costNotes={streamingData.brokerCostNotes || undefined}
+            isSelecting={!streamingData.brokerConfidence}
+          />
+        )}
 
-        {streamingData.brokerCostNotes && (
+        {/* GPU Provisioning Visual */}
+        {(isProvisioning || hasProvisioningData) && (
+          <GpuProvisioningVisual
+            isProvisioning={isProvisioning}
+            currentAttempt={streamingData.provisioningAttempt || undefined}
+            attempts={streamingData.provisioningAttempts || []}
+            retryDecision={streamingData.retryDecision || undefined}
+            finalResult={streamingData.provisioningResult || undefined}
+          />
+        )}
+
+        {/* Cost notes (when not provisioning) */}
+        {streamingData.brokerCostNotes && !isProvisioning && !hasProvisioningData && (
           <div className="bg-zinc-950 rounded-lg p-3">
-            <p className="text-xs text-zinc-500 mb-1">💰 Cost Optimization</p>
+            <p className="text-xs text-zinc-500 mb-1 flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Cost Optimization
+            </p>
             <p className="text-sm text-zinc-300">{streamingData.brokerCostNotes}</p>
           </div>
         )}
@@ -400,7 +488,7 @@ function StreamingStepContent({
   return (
     <div className="mt-4 flex items-center justify-center py-8">
       <div className="flex items-center gap-3 text-zinc-500">
-        <div className="w-5 h-5 rounded-full border-2 border-violet-500 border-t-transparent animate-spin" />
+        <div className="w-5 h-5 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
         <span>Processing...</span>
       </div>
     </div>
@@ -434,10 +522,13 @@ function StepDetails({ step }: { step: AgentStep }) {
       {/* Scout reasoning */}
       {data.scoutReasoning && (
         <div>
-          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2">
-            <span className="mr-2">🤔</span>Scout AI Reasoning
+          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            Scout AI Reasoning
           </h4>
-          <div className="bg-gradient-to-br from-violet-500/5 to-purple-500/5 border border-violet-500/20 rounded-lg p-4">
+          <div className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4">
             <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{data.scoutReasoning}</p>
           </div>
         </div>
@@ -479,10 +570,13 @@ function StepDetails({ step }: { step: AgentStep }) {
       {/* Specialist Thinking (full) */}
       {data.specialistThinkingStream && (
         <div>
-          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2">
-            <span className="mr-2">💭</span>Specialist Thinking Process
+          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Specialist Thinking Process
           </h4>
-          <div className="bg-gradient-to-br from-amber-500/5 to-orange-500/5 border border-amber-500/20 rounded-lg p-4 max-h-64 overflow-y-auto">
+          <div className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto">
             <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-mono">{data.specialistThinkingStream}</p>
           </div>
         </div>
@@ -491,21 +585,19 @@ function StepDetails({ step }: { step: AgentStep }) {
       {/* Compute analysis */}
       {data.computeAnalysis && (
         <div>
-          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2">
-            <span className="mr-2">🧠</span>Specialist Analysis
+          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            Specialist Analysis
           </h4>
           
           {/* Complexity Assessment */}
           {data.computeAnalysis.complexity && (
-             <div className="mb-3 bg-gradient-to-r from-violet-500/10 to-purple-500/10 border border-violet-500/20 rounded-lg p-3">
+             <div className="mb-3 bg-zinc-900/50 border border-zinc-700 rounded-lg p-3">
                <div className="flex items-center justify-between mb-2">
                  <span className="text-xs text-zinc-400 font-medium uppercase">Project Complexity</span>
-                 <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                    data.computeAnalysis.complexity === "Enterprise" ? "bg-purple-500 text-white" :
-                    data.computeAnalysis.complexity === "High" ? "bg-red-500 text-white" :
-                    data.computeAnalysis.complexity === "Medium" ? "bg-amber-500 text-zinc-900" :
-                    "bg-emerald-500 text-zinc-900"
-                 }`}>
+                 <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300">
                    {data.computeAnalysis.complexity}
                  </span>
                </div>
@@ -520,11 +612,11 @@ function StepDetails({ step }: { step: AgentStep }) {
           <div className="grid grid-cols-3 gap-3">
             <div className="bg-zinc-950 rounded-lg p-3">
               <p className="text-xs text-zinc-500 mb-1">Estimated VRAM</p>
-              <p className="text-lg font-semibold text-amber-400">{data.computeAnalysis.estimatedVram}GB</p>
+              <p className="text-lg font-semibold text-zinc-200">{data.computeAnalysis.estimatedVram}GB</p>
             </div>
             <div className="bg-zinc-950 rounded-lg p-3">
               <p className="text-xs text-zinc-500 mb-1">Architecture</p>
-              <p className="text-lg font-semibold text-cyan-400">{data.computeAnalysis.architecture}</p>
+              <p className="text-lg font-semibold text-zinc-200">{data.computeAnalysis.architecture}</p>
             </div>
             <div className="bg-zinc-950 rounded-lg p-3">
               <p className="text-xs text-zinc-500 mb-1">Multi-GPU</p>
@@ -562,10 +654,13 @@ function StepDetails({ step }: { step: AgentStep }) {
       {/* Broker Thinking (full) */}
       {data.brokerThinking && (
         <div>
-          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2">
-            <span className="mr-2">💭</span>Broker Reasoning
+          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Broker Reasoning
           </h4>
-          <div className="bg-gradient-to-br from-emerald-500/5 to-teal-500/5 border border-emerald-500/20 rounded-lg p-4 max-h-64 overflow-y-auto">
+          <div className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto">
             <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{data.brokerThinking}</p>
           </div>
         </div>
@@ -577,16 +672,17 @@ function StepDetails({ step }: { step: AgentStep }) {
           {data.matchConfidence && (
             <div className="bg-zinc-950 rounded-lg p-3">
               <p className="text-xs text-zinc-500 mb-1">Match Confidence</p>
-              <p className={`text-lg font-semibold ${
-                data.matchConfidence === "High" ? "text-emerald-400" :
-                data.matchConfidence === "Medium" ? "text-amber-400" :
-                "text-red-400"
-              }`}>{data.matchConfidence}</p>
+              <p className="text-lg font-semibold text-zinc-200">{data.matchConfidence}</p>
             </div>
           )}
           {data.costNotes && (
             <div className="bg-zinc-950 rounded-lg p-3">
-              <p className="text-xs text-zinc-500 mb-1">💰 Cost Notes</p>
+              <p className="text-xs text-zinc-500 mb-1 flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Cost Notes
+              </p>
               <p className="text-sm text-zinc-300">{data.costNotes}</p>
             </div>
           )}
@@ -596,10 +692,13 @@ function StepDetails({ step }: { step: AgentStep }) {
       {/* Legacy match reasoning (fallback) */}
       {data.matchReasoning && !data.brokerThinking && (
         <div>
-          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2">
-            <span className="mr-2">🎯</span>GPU Matching Logic
+          <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            GPU Matching Logic
           </h4>
-          <div className="bg-gradient-to-br from-amber-500/5 to-orange-500/5 border border-amber-500/20 rounded-lg p-4">
+          <div className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4">
             <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{data.matchReasoning}</p>
           </div>
         </div>
@@ -666,6 +765,170 @@ function FilePreview({ filename, content }: { filename: string; content: string 
           </pre>
         </div>
       )}
+    </div>
+  );
+}
+
+// GPU tier visuals
+const GPU_TIER_VISUALS: Record<string, { tier: string; color: string; gradient: string; icon: string }> = {
+  // Blackwell
+  B300: { tier: "Ultra", color: "violet", gradient: "from-violet-500 to-purple-600", icon: "⚡" },
+  B200: { tier: "Ultra", color: "violet", gradient: "from-violet-500 to-purple-600", icon: "⚡" },
+  // Hopper
+  H200: { tier: "Elite", color: "emerald", gradient: "from-emerald-400 to-teal-500", icon: "🔥" },
+  H100: { tier: "Elite", color: "emerald", gradient: "from-emerald-400 to-teal-500", icon: "🔥" },
+  // Ampere High
+  A100: { tier: "Pro", color: "blue", gradient: "from-blue-400 to-cyan-500", icon: "💎" },
+  "A100-40GB": { tier: "Pro", color: "blue", gradient: "from-blue-400 to-cyan-500", icon: "💎" },
+  A40: { tier: "Pro", color: "blue", gradient: "from-blue-400 to-indigo-500", icon: "⚙️" },
+  // Ada
+  L40s: { tier: "Advanced", color: "amber", gradient: "from-amber-400 to-orange-500", icon: "✨" },
+  L40: { tier: "Advanced", color: "amber", gradient: "from-amber-400 to-orange-500", icon: "✨" },
+  L4: { tier: "Standard", color: "green", gradient: "from-green-400 to-emerald-500", icon: "🚀" },
+  // Ampere Standard
+  A10: { tier: "Standard", color: "sky", gradient: "from-sky-400 to-blue-500", icon: "🎯" },
+  A10G: { tier: "Standard", color: "sky", gradient: "from-sky-400 to-blue-500", icon: "🎯" },
+  A6000: { tier: "Advanced", color: "indigo", gradient: "from-indigo-400 to-purple-500", icon: "🔧" },
+  A5000: { tier: "Standard", color: "indigo", gradient: "from-indigo-400 to-violet-500", icon: "🔧" },
+  A4000: { tier: "Entry", color: "slate", gradient: "from-slate-400 to-zinc-500", icon: "📦" },
+  A16: { tier: "Entry", color: "slate", gradient: "from-slate-400 to-zinc-500", icon: "📦" },
+  // Others
+  T4: { tier: "Budget", color: "zinc", gradient: "from-zinc-400 to-slate-500", icon: "💰" },
+  V100: { tier: "Legacy", color: "rose", gradient: "from-rose-400 to-pink-500", icon: "🏛️" },
+  P4: { tier: "Budget", color: "zinc", gradient: "from-zinc-500 to-gray-600", icon: "💡" },
+  M60: { tier: "Legacy", color: "zinc", gradient: "from-zinc-500 to-gray-600", icon: "📜" },
+  // RTX Ada
+  "RTX Pro 6000": { tier: "Pro", color: "lime", gradient: "from-lime-400 to-green-500", icon: "🎨" },
+  "RTX 6000 Ada": { tier: "Pro", color: "lime", gradient: "from-lime-400 to-green-500", icon: "🎨" },
+  "RTX 4000 Ada": { tier: "Standard", color: "teal", gradient: "from-teal-400 to-cyan-500", icon: "🎨" },
+};
+
+function getGpuVisual(gpuName: string) {
+  return GPU_TIER_VISUALS[gpuName] || { tier: "Unknown", color: "zinc", gradient: "from-zinc-400 to-zinc-500", icon: "🔲" };
+}
+
+function GpuSelectionCard({
+  gpu,
+  vram,
+  gpuCount = 1,
+  alternative,
+  confidence,
+  costNotes,
+  isSelecting = false,
+}: {
+  gpu: string;
+  vram?: number;
+  gpuCount?: number;
+  alternative?: string;
+  confidence?: string;
+  costNotes?: string;
+  isSelecting?: boolean;
+}) {
+  const visual = getGpuVisual(gpu);
+  const altVisual = alternative ? getGpuVisual(alternative) : null;
+
+  return (
+    <div className="space-y-3">
+      {/* Main GPU Card */}
+      <div className={`relative overflow-hidden rounded-xl border transition-all duration-500 ${
+        isSelecting 
+          ? "border-amber-500/30 bg-amber-500/5" 
+          : "border-emerald-500/30 bg-emerald-500/5"
+      }`}>
+        {/* Gradient background */}
+        <div className={`absolute inset-0 bg-gradient-to-br ${visual.gradient} opacity-10`} />
+        
+        {/* Content */}
+        <div className="relative z-10 p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${visual.gradient} flex items-center justify-center shadow-lg`}>
+                <span className="text-2xl">{visual.icon}</span>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xl font-bold text-zinc-100">{gpu}</h4>
+                  {gpuCount > 1 && (
+                    <span className="text-sm text-zinc-400">× {gpuCount}</span>
+                  )}
+                  <span className={`text-xs px-2 py-0.5 rounded-full bg-gradient-to-r ${visual.gradient} text-white font-medium`}>
+                    {visual.tier}
+                  </span>
+                </div>
+                <p className="text-sm text-zinc-400">
+                  {vram ? `${vram}GB VRAM` : "Loading specs..."}
+                  {gpuCount > 1 && vram && ` (${vram * gpuCount}GB total)`}
+                </p>
+              </div>
+            </div>
+            
+            {/* Confidence badge */}
+            {confidence && (
+              <div className={`px-3 py-1.5 rounded-lg ${
+                confidence === "High" 
+                  ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" 
+                  : confidence === "Medium"
+                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                    : "bg-red-500/20 text-red-400 border border-red-500/30"
+              }`}>
+                <p className="text-xs font-medium">{confidence} Confidence</p>
+              </div>
+            )}
+            
+            {isSelecting && (
+              <div className="flex items-center gap-2 text-amber-400">
+                <div className="w-4 h-4 rounded-full border-2 border-amber-400 border-t-transparent animate-spin" />
+                <span className="text-sm">Selecting...</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Animated border for selecting state */}
+        {isSelecting && (
+          <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-zinc-800 overflow-hidden">
+            <div 
+              className={`h-full bg-gradient-to-r ${visual.gradient}`}
+              style={{ 
+                width: "50%",
+                animation: "slide 1.5s ease-in-out infinite",
+              }}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Alternative GPU */}
+      {alternative && altVisual && (
+        <div className="flex items-center gap-3 p-3 rounded-lg bg-zinc-900/50 border border-zinc-700/50">
+          <span className="text-lg">{altVisual.icon}</span>
+          <div className="flex-1">
+            <p className="text-xs text-zinc-500">Alternative (if unavailable)</p>
+            <p className="text-sm font-medium text-zinc-300">{alternative}</p>
+          </div>
+          <span className={`text-xs px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400`}>
+            {altVisual.tier}
+          </span>
+        </div>
+      )}
+
+      {/* Cost notes */}
+      {costNotes && (
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-zinc-950/50 border border-zinc-800/50">
+          <svg className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p className="text-xs text-zinc-400 leading-relaxed">{costNotes}</p>
+        </div>
+      )}
+
+      <style jsx>{`
+        @keyframes slide {
+          0% { transform: translateX(-100%); }
+          50% { transform: translateX(200%); }
+          100% { transform: translateX(-100%); }
+        }
+      `}</style>
     </div>
   );
 }
