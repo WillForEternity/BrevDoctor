@@ -84,29 +84,28 @@ export async function POST(req: Request) {
         const scoutStream = streamObject({
           model: openai("gpt-4o"),
           schema: ScoutOutputSchema,
-          prompt: `You are an AI Scout for a GPU provisioning tool called Brev Doctor. 
+          prompt: `You are an expert Systems Architect for AI/ML Infrastructure.
     
-Your task: Given a list of file paths from a repository, select up to 8 files that are most likely to contain key configuration, architecture, or dependency information for training an ML model.
+Your task: Analyze the repository file structure to identify the files that reveal the **true compute scale** of the project.
 
-Priority files to look for:
-- requirements.txt, pyproject.toml, setup.py, environment.yml (dependencies)
-- Dockerfile, docker-compose.yml (container configs)
-- config.yaml, config.json, *.cfg files (training configs)
-- train.py, main.py, run.py (entry points)
-- model.py, architecture.py, network.py (model definitions)
-- README.md (may contain hardware requirements)
+We need to answer: "What hardware does this ACTUALLY run on?"
+
+Priority Selection Strategy:
+1. **Infrastructure & Execution**: Look for shell scripts, Makefiles, Dockerfiles, or \`.slurm\` scripts. These often contain flags like \`--gpus all\`, \`--memory=64g\`, or specific GPU types (e.g., "A100").
+2. **Documentation**: README.md is critical. Look for "Hardware Requirements", "Installation", or "Benchmarks".
+3. **Configuration**: config.yaml, pyproject.toml, requirements.txt.
+4. **Core Logic**: Main training loops (train.py), model definitions (model.py).
 
 Ignore:
-- Test files (test_*, *_test.py)
-- Documentation (docs/*, *.md except README)
-- Images, data files, checkpoints
-- IDE configs (.vscode, .idea)
-- Git files (.git/*)
+- Standard boilerplate (LICENSE, .gitignore)
+- Frontend/UI code
+- Test suites (unless they are the main entry point)
+- Data/Assets
 
-Here is the list of file paths:
+Here is the file list:
 ${fileTree.join("\n")}
 
-Analyze these ${fileTree.length} file paths and select the most relevant ones for GPU compute estimation. Provide detailed reasoning about why you selected each file.`,
+Select the top 8 files that will give the most accurate signal on compute requirements (VRAM, VCPU, RAM). Justify your selection based on expected information gain.`,
         });
 
         for await (const partial of scoutStream.partialObjectStream) {
@@ -173,47 +172,62 @@ Analyze these ${fileTree.length} file paths and select the most relevant ones fo
         let specialistResult: SpecialistOutput | null = null;
         let lastThinking = "";
 
-        let specialistPrompt = `You are an NVIDIA Solutions Architect specializing in ML/AI workloads. Your job is to analyze code and provide comprehensive GPU compute recommendations.
+        let specialistPrompt = `You are a Senior NVIDIA AI Systems Architect. Your goal is to determine the **safe and optimal** GPU hardware for a given codebase.
+You must look beyond simple parameter counting and analyze the *system architecture*, *dependencies*, and *implied scale*.
+
+## REPOSITORY CONTEXT
+- **Repository**: ${repoMeta.owner}/${repoMeta.repo}
+- **Branch**: ${repoMeta.branch || "main"}
+- **Total Files Scanned**: ${fileTree.length}
+
+## SCOUT AI'S FILE SELECTION REASONING
+The Scout AI analyzed the repository structure and selected the following files for deep analysis.
+**Scout's reasoning for file selection:**
+${scoutResult.reasoning}
+
+**Selected Files:**
+${scoutResult.selected_paths.map(p => `- ${p}`).join('\n')}
+
+This context helps you understand *why* these specific files were chosen and what signals the Scout detected in the repository structure.
+
+## AVAILABLE GPU OPTIONS (for context)
+${getGpuCatalogDescription()}
 
 ## YOUR TASK
-Analyze the provided code files and determine the exact compute requirements. You MUST show your detailed thinking process.
+Analyze the provided code files and documentation to determine compute requirements.
+CRITICAL: If the project is a framework, distributed system, or training pipeline, you must provision for the *workload*, not just the model weights.
 
-## THINKING PROCESS (REQUIRED)
-In your "thinking" field, walk through your analysis step-by-step:
+## ANALYSIS FRAMEWORK (Execute in "thinking" field)
 
-1. **File-by-File Analysis**: For each file, note what you find:
-   - Dependencies (transformers, torch, tensorflow, etc.)
-   - Model references (model names, architectures, parameter counts)
-   - Training configurations (batch size, sequence length, epochs)
-   - Data loading patterns (dataset size hints, preprocessing)
+1. **Context & Scope Extraction (The "Readme Test")**:
+   - **Explicit Claims**: Does the README mention "A100", "H100", "Multi-GPU", "Distributed", or specific VRAM amounts? **Trust these over code estimation.**
+   - **Execution Evidence**: Look for flags in scripts/docs: \`--gpus all\`, \`batch_size=4096\`, \`fp16\`.
+   - **Project Archetype**:
+     - *Toy/Demo*: <1GB VRAM.
+     - *Research/Fine-tuning*: 16-24GB VRAM (A10G, L4).
+     - *Production Training*: 40-80GB+ VRAM (A100, H100).
+     - *Distributed System*: Multi-GPU required.
 
-2. **Model Size Estimation**: 
-   - Identify the model (e.g., "Llama-2-7B", "BERT-base", "ResNet-50")
-   - Estimate parameter count
-   - Calculate memory: params × precision (fp32=4B, fp16=2B, bf16=2B)
-   - Add optimizer states (Adam: 2x model size for fp32, or 8 bytes/param)
-   - Add gradient storage (same as model size)
-   - Add activation memory (batch_size × seq_len × hidden_dim × layers × 2)
+2. **Workload Analysis**:
+   - **LLM/NLP**: High VRAM for weights + KV cache.
+   - **CV/Diffusion**: High VRAM for activations (batch size sensitive).
+   - **RL/Robotics**: **Massive CPU-RAM usage**, Experience Replay buffers (can be 10GB+ VRAM/RAM), parallel environments.
+   - **Scientific/Graph**: Large matrices, memory-bound.
 
-3. **VRAM Calculation**:
-   - Model weights: X GB
-   - Optimizer states: Y GB  
-   - Gradients: Z GB
-   - Activations (estimate): W GB
-   - Buffer/overhead: 10-20%
-   - TOTAL: Sum all with buffer
+3. **Compute Calculation (The "Safety" Rule)**:
+   - **Base Overhead**: PyTorch/TF + CUDA Context = **~1-2GB allocated immediately**. Never estimate below this.
+   - **Model Weights**: Estimate if possible.
+   - **Training Overhead**: Optimizer (2x weights), Gradients (1x), **Activations** (often 5-10x weights for large batches).
+   - **Buffer**: Always add 20-30% buffer.
 
-4. **Architecture Decision**:
-   - Any: Basic CUDA, no special features needed
-   - Ampere (A10/A100): TF32, structured sparsity, 3rd gen tensor cores
-   - Ada (L4/L40): FP8, 4th gen tensor cores, video encode/decode
-   - Hopper (H100): Transformer Engine, FP8, HBM3, fastest for LLMs
+4. **Architecture Selection**:
+   - **Ampere (A10/A100)**: Safe default for most modern DL (TF32 support).
+   - **Hopper (H100)**: Only if FP8 or "Transformer Engine" mentioned.
+   - **Ada (L4/L40)**: Good for inference or video.
 
-5. **Complexity Assessment**:
-   - Low: <1B params, simple fine-tuning, inference only
-   - Medium: 1-7B params, standard training, moderate datasets
-   - High: 7-70B params, full training, large datasets
-   - Enterprise: >70B params, multi-node, massive scale
+5. **Sanity Check**:
+   - If your calculation is < 4GB but the project says "Deep Reinforcement Learning", **you are wrong**. Bump to minimum viable workstation GPU (A10G/L4).
+   - If "Distributed" is mentioned, requires_multi_gpu MUST be true.
 
 ## FILES TO ANALYZE
 ${formattedContents}
@@ -300,45 +314,63 @@ Analyze these files thoroughly and provide your detailed compute requirements.`;
 
         const inventory = getBrevInventory();
         
-        // Streamlined GPU catalog - concise but complete
-        const gpuCatalogConcise = `## AVAILABLE GPUs (sorted by VRAM)
-| GPU | VRAM | Arch | $/hr | Best For |
-|-----|------|------|------|----------|
-| T4 | 16GB | Turing | 0.35 | Budget inference |
-| P4 | 8GB | Pascal | 0.25 | Basic inference |
-| A4000 | 16GB | Ampere | 0.35 | Entry workstation |
-| A10/A10G | 24GB | Ampere | 0.75 | Balanced training/inference |
-| L4 | 24GB | Ada | 0.58 | Best value inference, FP8 |
-| A5000 | 24GB | Ampere | 0.50 | Mid-tier professional |
-| V100 | 32GB | Volta | 2.50 | Legacy training |
-| A100-40GB | 40GB | Ampere | 1.89 | Standard training |
-| L40/L40s | 48GB | Ada | 1.40-1.50 | High perf inference |
-| A40 | 48GB | Ampere | 1.28 | Training + inference |
-| A6000 | 48GB | Ampere | 0.80 | Professional workstation |
-| A100 | 80GB | Ampere | 2.49 | Large model training |
-| H100 | 80GB | Hopper | 3.49 | Fastest, Transformer Engine |
-| H200 | 141GB | Hopper | 4.50 | Maximum VRAM |
-| B200/B300 | 192GB | Blackwell | TBD | Cutting edge |`;
+        // Use full catalog from shared library to ensure consistency
+        const gpuCatalog = getGpuCatalogDescription();
 
-        // Use LLM-based selection with concise GPU catalog
-        const brokerPrompt = `You are a GPU Provisioning Expert for Brev.dev. Select the optimal GPU.
+        const brokerPrompt = `You are a Strategic Infrastructure Advisor for Brev.dev.
+        
+## MISSION
+Select the GPU that guarantees **success** and **stability** for the user's project, while optimizing cost *only if safe to do so*.
 
-## REQUIREMENTS
-- VRAM: ${specialistResult.estimated_vram_gb}GB
-- Architecture: ${specialistResult.recommended_gpu_architecture}
-- Multi-GPU: ${specialistResult.requires_multi_gpu ? "Yes" : "No"}
-- Complexity: ${specialistResult.project_complexity}
+## REPOSITORY CONTEXT
+- **Repository**: ${repoMeta.owner}/${repoMeta.repo}
+- **Branch**: ${repoMeta.branch || "main"}
+- **Total Files in Repo**: ${fileTree.length}
 
-${gpuCatalogConcise}
+## SCOUT AI'S ANALYSIS
+The Scout AI identified these as the most relevant files for compute analysis:
+${scoutResult.selected_paths.map(p => `- ${p}`).join('\n')}
 
-## SELECTION RULES
-1. VRAM must be >= requirement (add 20-30% headroom for training)
-2. Architecture compatibility: Any=all work, Ampere=A10/A100+, Ada=L4/L40+, Hopper=H100/H200 only
-3. Don't over-provision (no H100 for 8GB workload)
-4. Always provide alternative_gpu as fallback
-5. Popular GPUs (L4, T4, A10G) are usually more available
+**Scout's reasoning**: ${scoutResult.reasoning}
 
-Be concise in thinking. Select the best cost-effective GPU that meets requirements.`;
+## SPECIALIST'S COMPUTE ANALYSIS
+The Specialist analyzed the code and determined:
+
+**Full Analysis Thinking:**
+${specialistResult.thinking}
+
+**Key Findings:**
+- **Estimated VRAM Needed**: ${specialistResult.estimated_vram_gb}GB
+- **Recommended Architecture**: ${specialistResult.recommended_gpu_architecture}
+- **Multi-GPU Required**: ${specialistResult.requires_multi_gpu ? "Yes" : "No"}
+- **Project Complexity**: ${specialistResult.project_complexity}
+- **Complexity Reasoning**: ${specialistResult.complexity_reasoning}
+- **Recommended CPU Cores**: ${specialistResult.recommended_cpu_cores}
+- **Recommended System RAM**: ${specialistResult.recommended_system_ram_gb}GB
+- **Estimated Disk Space**: ${specialistResult.estimated_disk_space_gb}GB
+- **Setup Commands**: ${specialistResult.setup_commands.length > 0 ? specialistResult.setup_commands.join(', ') : 'None specified'}
+
+${gpuCatalog}
+
+## SELECTION LOGIC
+1. **Safety First**: 
+   - If Complexity is "High" or "Enterprise", prefer A100/H100/L40s. Do not recommend consumer-tier cards (T4) for heavy training.
+   - If VRAM requirement is borderline (e.g. 22GB req for 24GB card), **upsize** to the next tier (40GB+) to prevent OOM.
+   
+2. **Architecture Matching**:
+   - "Hopper" req -> H100 (or H200).
+   - "Ampere" req -> A100, A10, A6000, A40.
+   - "Ada" req -> L4, L40s.
+
+3. **Availability Heuristic**:
+   - L4 and A10G are often most available.
+   - H100 is scarce. If H100 is ideal but overkill, suggest A100.
+
+4. **Cost/Performance**:
+   - For "Low/Medium" complexity: L4 or A10G are best value.
+   - For "High" complexity: A100-80GB is often more cost-effective than crashing 5 times on an A10.
+
+Make your selection based on the complete analysis chain above. Reference specific findings from the Specialist's analysis in your reasoning.`;
 
         let brokerResult: BrokerOutput;
         let lastStreamState = "";
@@ -518,7 +550,7 @@ Be concise in thinking. Select the best cost-effective GPU that meets requiremen
               break;
             }
 
-            // Ask the agent to decide what GPU to try next
+            // Ask the agent to decide what GPU to try next, passing full context
             const retryDecision = await decideGpuRetry(
               specialistResult,
               provisioningAttempts.map(a => ({
@@ -526,7 +558,12 @@ Be concise in thinking. Select the best cost-effective GPU that meets requiremen
                 vram: a.vram,
                 gpuCount: a.gpuCount,
                 error: a.error || "Unknown error",
-              }))
+              })),
+              {
+                repoMeta,
+                scoutReasoning: scoutResult.reasoning,
+                selectedFiles: scoutResult.selected_paths,
+              }
             );
 
             send({

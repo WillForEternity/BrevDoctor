@@ -193,7 +193,7 @@ export async function analyzeRepository(
       ...alternativeInstance,
       count: brokerOutput.gpu_count,
     } : null;
-
+    
     const match: MatchResult = { best, second_best };
     
     // Generate recommendation summary

@@ -229,7 +229,7 @@ async function readTokenFromCredentials(): Promise<string | null> {
  * This will use the refresh token stored by Brev CLI
  */
 async function refreshBrevToken(): Promise<string | null> {
-  try {
+    try {
     // Try to refresh using the Brev CLI
     // The CLI should have a refresh token stored and can renew automatically
     await execAsync("brev refresh", { timeout: 30000 });
@@ -381,7 +381,7 @@ export async function attemptGpuProvisioning(
         errorType: "out_of_stock",
         suggestion: "Try a different GPU type or memory configuration",
       };
-    }
+        }
     
     // Detect auth errors (might need token refresh)
     if (
@@ -403,8 +403,8 @@ export async function attemptGpuProvisioning(
         errorType: "auth_error",
         suggestion: "Run 'brev login' to re-authenticate",
       };
-    }
-    
+  }
+  
     // Detect invalid configuration
     if (
       combinedError.includes("invalid gpu") ||

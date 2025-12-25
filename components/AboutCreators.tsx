@@ -13,16 +13,18 @@ export function AboutCreators() {
 
   const creators = [
     {
-      name: "Alex Chen",
-      role: "ML Infrastructure Engineer",
-      bio: "Passionate about democratizing GPU access for machine learning developers. Previously worked on distributed training systems at leading tech companies.",
-      avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Alex",
+      name: "Will",
+      role: "Co-Founder",
+      bio: "Passionate about leveraging AI to simplify complex infrastructure decisions and empower developers.",
+      avatar: "/creator2.jpeg",
+      imageStyle: "scale-[1.85] -translate-x-2", // Zoom in more and shift left on Will
     },
     {
-      name: "Jordan Smith",
-      role: "DevOps Architect",
-      bio: "Specializes in cloud infrastructure and developer experience. Believes in making complex deployments simple and accessible to everyone.",
-      avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Jordan",
+      name: "Andrey",
+      role: "Co-Founder",
+      bio: "Building tools to make GPU infrastructure accessible and intelligent for developers everywhere.",
+      avatar: "/creator1.jpeg",
+      imageStyle: "", // No zoom
     },
   ];
 
@@ -60,13 +62,15 @@ export function AboutCreators() {
           {creators.map((creator, index) => (
             <div
               key={index}
-              className="flex gap-6 p-6 rounded-xl bg-zinc-800/50 border border-zinc-700/50 hover:border-emerald-500/30 transition-colors duration-300"
+              className="flex items-center gap-6 py-6 px-6 rounded-xl bg-zinc-800/50 border border-zinc-700/50 hover:border-emerald-500/30 transition-colors duration-300"
             >
-              <img
-                src={creator.avatar}
-                alt={creator.name}
-                className="w-20 h-20 rounded-full bg-zinc-700 flex-shrink-0"
-              />
+              <div className="w-28 h-28 rounded-full bg-zinc-700 flex-shrink-0 overflow-hidden">
+                <img
+                  src={creator.avatar}
+                  alt={creator.name}
+                  className={`w-full h-full object-cover ${creator.imageStyle}`}
+                />
+              </div>
               <div className="flex-1">
                 <h3 className="text-xl font-semibold text-zinc-100 mb-1">
                   {creator.name}

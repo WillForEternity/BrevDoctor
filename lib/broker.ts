@@ -8,6 +8,12 @@ export interface BrokerResult extends MatchResult {
   brokerOutput: BrokerOutput;
 }
 
+export interface BrokerContext {
+  repoMeta?: { owner: string; repo: string; branch?: string };
+  scoutOutput?: { reasoning: string; selected_paths: string[] };
+  totalFilesInRepo?: number;
+}
+
 /**
  * LLM-powered GPU instance selector.
  * Uses AI reasoning to select the optimal GPU configuration based on:
@@ -19,64 +25,76 @@ export interface BrokerResult extends MatchResult {
  * The agent is given the full list of available GPUs and makes an informed decision.
  */
 export async function selectGpuInstance(
-  needs: SpecialistOutput
+  needs: SpecialistOutput,
+  context?: BrokerContext
 ): Promise<BrokerOutput> {
   const gpuCatalog = getGpuCatalogDescription();
 
-  const prompt = `You are a GPU Provisioning Expert for Brev.dev. Your job is to select the optimal GPU for the given compute requirements.
+  // Build context sections
+  let repoContextSection = "";
+  if (context?.repoMeta) {
+    repoContextSection = `
+## REPOSITORY CONTEXT
+- **Repository**: ${context.repoMeta.owner}/${context.repoMeta.repo}
+- **Branch**: ${context.repoMeta.branch || "main"}
+- **Total Files in Repo**: ${context.totalFilesInRepo || "Unknown"}
+`;
+  }
 
-## COMPUTE REQUIREMENTS (from Specialist Analysis)
-- **VRAM Needed**: ${needs.estimated_vram_gb}GB
+  let scoutContextSection = "";
+  if (context?.scoutOutput) {
+    scoutContextSection = `
+## SCOUT AI'S ANALYSIS
+The Scout AI identified these as the most relevant files for compute analysis:
+${context.scoutOutput.selected_paths.map(p => `- ${p}`).join('\n')}
+
+**Scout's reasoning**: ${context.scoutOutput.reasoning}
+`;
+  }
+
+  const prompt = `You are a Strategic Infrastructure Advisor for Brev.dev.
+        
+## MISSION
+Select the GPU that guarantees **success** and **stability** for the user's project, while optimizing cost *only if safe to do so*.
+${repoContextSection}${scoutContextSection}
+## SPECIALIST'S COMPUTE ANALYSIS
+The Specialist analyzed the code and determined:
+
+**Full Analysis Thinking:**
+${needs.thinking}
+
+**Key Findings:**
+- **Estimated VRAM Needed**: ${needs.estimated_vram_gb}GB
 - **Recommended Architecture**: ${needs.recommended_gpu_architecture}
 - **Multi-GPU Required**: ${needs.requires_multi_gpu ? "Yes" : "No"}
 - **Project Complexity**: ${needs.project_complexity}
-- **CPU Cores Needed**: ${needs.recommended_cpu_cores}
-- **System RAM Needed**: ${needs.recommended_system_ram_gb}GB
-- **Disk Space Needed**: ${needs.estimated_disk_space_gb}GB
-
-## SPECIALIST'S REASONING
-${needs.complexity_reasoning}
+- **Complexity Reasoning**: ${needs.complexity_reasoning}
+- **Recommended CPU Cores**: ${needs.recommended_cpu_cores}
+- **Recommended System RAM**: ${needs.recommended_system_ram_gb}GB
+- **Estimated Disk Space**: ${needs.estimated_disk_space_gb}GB
+- **Setup Commands**: ${needs.setup_commands.length > 0 ? needs.setup_commands.join(', ') : 'None specified'}
 
 ${gpuCatalog}
 
-## YOUR TASK
-Select the BEST GPU for this workload. Consider:
+## SELECTION LOGIC
+1. **Safety First**: 
+   - If Complexity is "High" or "Enterprise", prefer A100/H100/L40s. Do not recommend consumer-tier cards (T4) for heavy training.
+   - If VRAM requirement is borderline (e.g. 22GB req for 24GB card), **upsize** to the next tier (40GB+) to prevent OOM.
+   
+2. **Architecture Matching**:
+   - "Hopper" req -> H100 (or H200).
+   - "Ampere" req -> A100, A10, A6000, A40.
+   - "Ada" req -> L4, L40s.
 
-1. **VRAM Sufficiency**: 
-   - Total VRAM must meet or exceed requirement
-   - For training: Add 20-30% headroom for optimizer states/activations
-   - For inference: Can be closer to exact requirement
+3. **Availability Heuristic**:
+   - L4 and A10G are often most available.
+   - H100 is scarce. If H100 is ideal but overkill, suggest A100.
 
-2. **Architecture Compatibility**:
-   - "Any" → All architectures work
-   - "Ampere" → A10G, A100, A40, or newer (Hopper, Ada)
-   - "Ada" → L4, L40, L40s, RTX Ada series (or Hopper for compat)
-   - "Hopper" → H100, H200 only (for Transformer Engine, FP8)
+4. **Cost/Performance**:
+   - For "Low/Medium" complexity: L4 or A10G are best value.
+   - For "High" complexity: A100-80GB is often more cost-effective than crashing 5 times on an A10.
 
-3. **Multi-GPU Considerations**:
-   - If multi-GPU required, specify gpu_count >= 2
-   - Consider if NVLink is needed (A100/H100 for training)
-
-4. **Cost Optimization**:
-   - Don't over-provision (80GB for 24GB workload is wasteful)
-   - Consider cost per effective VRAM-hour
-   - For short runs, faster GPUs may be cheaper overall
-
-5. **Practical Recommendations**:
-   - L4, T4: Great for inference, fine-tuning small models ($$$)
-   - A10G, A10: Balanced for training/inference, good value ($$)
-   - L40s, A40, A6000: Solid training with 48GB ($$$)
-   - A100-40GB: Standard for training, when 24-48GB isn't enough ($$$$)
-   - A100-80GB: Large models, when 40GB isn't enough ($$$$$)
-   - H100: Fastest training, required for Hopper features ($$$$$$)
-   - H200: Maximum VRAM for massive models ($$$$$$$)
-
-## IMPORTANT
-- Select a specific GPU name from the catalog
-- If the primary choice might be out of stock, also provide an alternative
-- Be practical about what's likely to be available
-
-Provide your recommendation with confidence level.`;
+Make your selection based on the complete analysis chain above. Reference specific findings from the Specialist's analysis in your reasoning.`;
 
   const { object: brokerOutput } = await generateObject({
     model: openai("gpt-4o"),
@@ -87,13 +105,20 @@ Provide your recommendation with confidence level.`;
   return brokerOutput;
 }
 
+export interface GpuRetryContext {
+  repoMeta?: { owner: string; repo: string; branch?: string };
+  scoutReasoning?: string;
+  selectedFiles?: string[];
+}
+
 /**
  * When a GPU provisioning fails (e.g., out of stock), ask the agent to decide
  * what GPU to try next.
  */
 export async function decideGpuRetry(
   needs: SpecialistOutput,
-  failedAttempts: Array<{ gpu: string; vram: number; gpuCount: number; error: string }>
+  failedAttempts: Array<{ gpu: string; vram: number; gpuCount: number; error: string }>,
+  context?: GpuRetryContext
 ): Promise<GpuRetryDecision> {
   const gpuCatalog = getGpuCatalogDescription();
   
@@ -101,37 +126,67 @@ export async function decideGpuRetry(
     .map((a, i) => `${i + 1}. ${a.gpu} (${a.vram}GB × ${a.gpuCount}) - Failed: ${a.error}`)
     .join("\n");
 
-  const prompt = `You are a GPU Provisioning Expert for Brev.dev. A provisioning attempt has failed and you need to decide what to try next.
+  let repoContextSection = "";
+  if (context?.repoMeta) {
+    repoContextSection = `
+## REPOSITORY CONTEXT
+- **Repository**: ${context.repoMeta.owner}/${context.repoMeta.repo}
+- **Branch**: ${context.repoMeta.branch || "main"}
+`;
+  }
 
-## COMPUTE REQUIREMENTS
-- **VRAM Needed**: ${needs.estimated_vram_gb}GB
-- **Recommended Architecture**: ${needs.recommended_gpu_architecture}
+  let scoutContextSection = "";
+  if (context?.scoutReasoning) {
+    scoutContextSection = `
+## SCOUT'S FILE SELECTION
+${context.selectedFiles?.map(p => `- ${p}`).join('\n') || 'No files listed'}
+
+**Scout's reasoning**: ${context.scoutReasoning}
+`;
+  }
+
+  const prompt = `You are a Strategic Infrastructure Advisor for Brev.dev. A provisioning attempt has failed.
+
+## MISSION
+Find a viable alternative GPU that preserves project success. **Do not downgrade capabilities** if the project is complex.
+${repoContextSection}${scoutContextSection}
+## SPECIALIST'S FULL ANALYSIS
+The Specialist thoroughly analyzed this project and determined:
+
+**Detailed Thinking:**
+${needs.thinking}
+
+**Computed Requirements:**
+- **Required VRAM**: ${needs.estimated_vram_gb}GB
+- **Architecture**: ${needs.recommended_gpu_architecture}
+- **Complexity**: ${needs.project_complexity}
+- **Complexity Reasoning**: ${needs.complexity_reasoning}
 - **Multi-GPU Required**: ${needs.requires_multi_gpu ? "Yes" : "No"}
-- **Project Complexity**: ${needs.project_complexity}
+- **CPU Cores**: ${needs.recommended_cpu_cores}
+- **System RAM**: ${needs.recommended_system_ram_gb}GB
+- **Disk Space**: ${needs.estimated_disk_space_gb}GB
 
 ## FAILED PROVISIONING ATTEMPTS
 ${failedAttemptsStr}
 
 ${gpuCatalog}
 
-## YOUR TASK
-Based on the failed attempts, decide what GPU to try next:
+## RETRY LOGIC
+1. **Out of Stock?**
+   - If H100 OOS -> Try A100-80GB (closest equivalent).
+   - If A100 OOS -> Try L40s or Multi-GPU A10g/L4.
+   - If L4 OOS -> Try A10g or T4.
 
-1. **If the GPU was out of stock**: Try a similar GPU with comparable specs
-   - If H100 failed, try A100-80GB or L40s
-   - If A100 failed, try A40, L40s, or H100
-   - If L4 failed, try T4 or A10G
+2. **Avoid Death Spirals**:
+   - If a high-end card failed, do NOT fallback to a low-end card (e.g. H100 -> T4) just to get *something*. That will just crash the user's job.
+   - Prefer **Multi-GPU** of cheaper cards over a single weak card. (e.g. 2x L40s > 1x A100 if A100 is OOS).
+   - Reference the Specialist's thinking above to understand *why* the VRAM/complexity requirements exist.
 
-2. **Consider alternatives that meet requirements**:
-   - Same or more VRAM
-   - Compatible architecture
-   - Different GPU type that's more likely to be available
+3. **Termination**:
+   - If 3+ tiers have failed, stop.
+   - If no valid alternative exists (e.g. need 80GB and A100/H100/H200 all failed), stop.
 
-3. **Know when to stop**:
-   - If 3+ different GPUs have failed, consider stopping
-   - If no suitable alternatives exist, should_retry = false
-
-Provide your decision with reasoning.`;
+Provide your decision with reasoning, referencing the Specialist's analysis where relevant.`;
 
   const { object: retryDecision } = await generateObject({
     model: openai("gpt-4o"),
@@ -148,7 +203,7 @@ Provide your decision with reasoning.`;
 export function brokerOutputToInstance(output: BrokerOutput): BrevInstance | null {
   const gpu = getGpuByName(output.recommended_gpu);
   if (!gpu) return null;
-  
+
   return {
     ...gpu,
     count: output.gpu_count,

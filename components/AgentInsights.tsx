@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { AgentStep } from "@/types/agentSchemas";
 import { GpuProvisioningVisual } from "./GpuProvisioningVisual";
 import type { GpuProvisioningAttempt } from "@/hooks/useAnalysisStream";
@@ -57,15 +59,56 @@ interface AgentInsightsProps {
   className?: string;
 }
 
-export function AgentInsights({ steps, streamingData, className = "" }: AgentInsightsProps) {
-  const [expandedStep, setExpandedStep] = useState<string | null>(null);
-  const thinkingRef = useRef<HTMLDivElement>(null);
+// Markdown renderer component with proper styling
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="markdown-content">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => <h1 className="text-xl font-bold text-zinc-100 mt-4 mb-2 first:mt-0">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-lg font-bold text-zinc-200 mt-3 mb-2 first:mt-0">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-base font-semibold text-zinc-300 mt-2 mb-1 first:mt-0">{children}</h3>,
+          p: ({ children }) => <p className="text-sm text-zinc-300 leading-relaxed mb-2 last:mb-0">{children}</p>,
+          strong: ({ children }) => <strong className="font-bold text-zinc-100">{children}</strong>,
+          em: ({ children }) => <em className="italic text-zinc-300">{children}</em>,
+          ul: ({ children }) => <ul className="list-disc list-outside ml-4 space-y-1 mb-2 text-sm text-zinc-300 last:mb-0">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal list-outside ml-4 space-y-1 mb-2 text-sm text-zinc-300 last:mb-0">{children}</ol>,
+          li: ({ children }) => <li className="text-sm text-zinc-300 pl-1">{children}</li>,
+          code: ({ children, className }) => {
+            const isInline = !className;
+            if (isInline) {
+              return <code className="px-1.5 py-0.5 bg-zinc-800 text-emerald-400 rounded text-xs font-mono">{children}</code>;
+            }
+            return <code className="block bg-zinc-900 p-2 rounded text-xs font-mono text-emerald-400 overflow-x-auto">{children}</code>;
+          },
+          pre: ({ children }) => <pre className="bg-zinc-900 p-3 rounded-lg overflow-x-auto mb-2 last:mb-0">{children}</pre>,
+          blockquote: ({ children }) => <blockquote className="border-l-4 border-zinc-700 pl-4 italic text-zinc-400 my-2 first:mt-0 last:mb-0">{children}</blockquote>,
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
-  // Auto-expand current running step
+export function AgentInsights({ steps, streamingData, className = "" }: AgentInsightsProps) {
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const thinkingRef = useRef<HTMLDivElement>(null);
+  const activeStepRef = useRef<HTMLDivElement>(null);
+
+  // Auto-expand current running step and keep previous steps expanded
   useEffect(() => {
     const runningStep = steps.find((s) => s.status === "running");
     if (runningStep && (runningStep.id === "scout" || runningStep.id === "analyze" || runningStep.id === "match")) {
-      setExpandedStep(runningStep.id);
+      setExpandedSteps((prev) => new Set([...prev, runningStep.id]));
+      
+      // Scroll to the active step after a brief delay to allow rendering
+      setTimeout(() => {
+        if (activeStepRef.current) {
+          activeStepRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+      }, 100);
     }
   }, [steps]);
 
@@ -75,6 +118,18 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
       thinkingRef.current.scrollTop = thinkingRef.current.scrollHeight;
     }
   }, [streamingData?.scoutReasoning, streamingData?.specialistThinking, streamingData?.brokerThinking]);
+
+  const toggleStep = (stepId: string) => {
+    setExpandedSteps((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(stepId)) {
+        newSet.delete(stepId);
+      } else {
+        newSet.add(stepId);
+      }
+      return newSet;
+    });
+  };
 
   const getStepIcon = (step: AgentStep) => {
     const iconMap: Record<string, React.ReactNode> = {
@@ -140,25 +195,30 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
 
       {/* Steps timeline */}
       <div className="space-y-3">
-        {steps.map((step) => (
-          <div
-            key={step.id}
-            className={`relative rounded-xl border transition-all duration-300 overflow-hidden ${
-              step.status === "running"
-                ? "bg-zinc-900/50 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
-                : step.status === "complete"
-                ? "bg-zinc-900/50 border-zinc-700/50 hover:border-zinc-600/50"
-                : step.status === "error"
-                ? "bg-red-500/10 border-red-500/40"
-                : "bg-zinc-900/30 border-zinc-800/50"
-            }`}
-          >
-            {/* Step header */}
-            <button
-              onClick={() => setExpandedStep(expandedStep === step.id ? null : step.id)}
-              disabled={step.status === "pending"}
-              className="w-full p-4 flex items-center gap-4 text-left disabled:cursor-default"
+        {steps.map((step) => {
+          const isExpanded = expandedSteps.has(step.id);
+          const isActive = step.status === "running";
+          
+          return (
+            <div
+              key={step.id}
+              ref={isActive ? activeStepRef : null}
+              className={`relative rounded-xl border transition-all duration-300 overflow-hidden ${
+                step.status === "running"
+                  ? "bg-zinc-900/50 border-emerald-500/40 shadow-lg shadow-emerald-500/10"
+                  : step.status === "complete"
+                  ? "bg-zinc-900/50 border-zinc-700/50 hover:border-zinc-600/50"
+                  : step.status === "error"
+                  ? "bg-red-500/10 border-red-500/40"
+                  : "bg-zinc-900/30 border-zinc-800/50"
+              }`}
             >
+              {/* Step header */}
+              <button
+                onClick={() => toggleStep(step.id)}
+                disabled={step.status === "pending"}
+                className="w-full p-4 flex items-center gap-4 text-left disabled:cursor-default"
+              >
               {/* Icon */}
               <div className={`text-2xl ${step.status === "pending" ? "opacity-40 grayscale" : ""}`}>
                 {getStepIcon(step)}
@@ -222,7 +282,7 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
               {step.status !== "pending" && (
                 <svg
                   className={`w-5 h-5 text-zinc-500 transition-transform duration-200 ${
-                    expandedStep === step.id ? "rotate-180" : ""
+                    isExpanded ? "rotate-180" : ""
                   }`}
                   fill="none"
                   viewBox="0 0 24 24"
@@ -234,7 +294,7 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
             </button>
 
             {/* Expanded content - Show streaming data for running steps */}
-            {expandedStep === step.id && (step.data || step.status === "running") && (
+            {isExpanded && (step.data || step.status === "running") && (
               <div className="px-4 pb-4 pt-0 border-t border-zinc-800/50">
                 {step.status === "running" ? (
                   <StreamingStepContent step={step} streamingData={streamingData} thinkingRef={thinkingRef} />
@@ -251,7 +311,8 @@ export function AgentInsights({ steps, streamingData, className = "" }: AgentIns
               </div>
             )}
           </div>
-        ))}
+        );
+        })}
       </div>
     </div>
   );
@@ -279,12 +340,14 @@ function StreamingStepContent({
             ref={thinkingRef}
             className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-48 overflow-y-auto"
           >
-            <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
-              {streamingData.scoutReasoning || (
-                <span className="text-zinc-500 italic">Analyzing file structure...</span>
-              )}
-              <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
-            </p>
+            {streamingData.scoutReasoning ? (
+              <>
+                <MarkdownContent content={streamingData.scoutReasoning} />
+                <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
+              </>
+            ) : (
+              <span className="text-sm text-zinc-500 italic">Analyzing file structure...</span>
+            )}
           </div>
         </div>
 
@@ -324,12 +387,14 @@ function StreamingStepContent({
             ref={thinkingRef}
             className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto"
           >
-            <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-mono">
-              {streamingData.specialistThinking || (
-                <span className="text-zinc-500 italic">Analyzing model architecture, dependencies, and compute requirements...</span>
-              )}
-              <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
-            </p>
+            {streamingData.specialistThinking ? (
+              <>
+                <MarkdownContent content={streamingData.specialistThinking} />
+                <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
+              </>
+            ) : (
+              <span className="text-sm text-zinc-500 italic">Analyzing model architecture, dependencies, and compute requirements...</span>
+            )}
           </div>
         </div>
 
@@ -429,17 +494,19 @@ function StreamingStepContent({
               ref={thinkingRef}
               className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto"
             >
-              <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">
-                {streamingData.brokerThinking || (
-                  <span className="text-zinc-500 italic flex items-center gap-2">
-                    <span className="inline-block w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-                    Analyzing inventory and matching to requirements...
-                  </span>
-                )}
-                {brokerStatus !== "complete" && streamingData.brokerThinking && (
-                  <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
-                )}
-              </p>
+              {streamingData.brokerThinking ? (
+                <>
+                  <MarkdownContent content={streamingData.brokerThinking} />
+                  {brokerStatus !== "complete" && (
+                    <span className="inline-block w-2 h-4 bg-emerald-400 animate-pulse ml-1" />
+                  )}
+                </>
+              ) : (
+                <span className="text-sm text-zinc-500 italic flex items-center gap-2">
+                  <span className="inline-block w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  Analyzing inventory and matching to requirements...
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -529,7 +596,7 @@ function StepDetails({ step }: { step: AgentStep }) {
             Scout AI Reasoning
           </h4>
           <div className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4">
-            <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{data.scoutReasoning}</p>
+            <MarkdownContent content={data.scoutReasoning} />
           </div>
         </div>
       )}
@@ -577,7 +644,7 @@ function StepDetails({ step }: { step: AgentStep }) {
             Specialist Thinking Process
           </h4>
           <div className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto">
-            <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap font-mono">{data.specialistThinkingStream}</p>
+            <MarkdownContent content={data.specialistThinkingStream} />
           </div>
         </div>
       )}
@@ -661,7 +728,7 @@ function StepDetails({ step }: { step: AgentStep }) {
             Broker Reasoning
           </h4>
           <div className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4 max-h-64 overflow-y-auto">
-            <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{data.brokerThinking}</p>
+            <MarkdownContent content={data.brokerThinking} />
           </div>
         </div>
       )}
@@ -699,7 +766,7 @@ function StepDetails({ step }: { step: AgentStep }) {
             GPU Matching Logic
           </h4>
           <div className="bg-zinc-900/50 border border-zinc-700 rounded-lg p-4">
-            <p className="text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap">{data.matchReasoning}</p>
+            <MarkdownContent content={data.matchReasoning} />
           </div>
         </div>
       )}

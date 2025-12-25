@@ -1,12 +1,19 @@
 import { generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { SpecialistOutputSchema, type SpecialistOutput } from "@/types/agentSchemas";
+import { SpecialistOutputSchema, type SpecialistOutput, type ScoutOutput } from "@/types/agentSchemas";
 import { getGpuCatalogDescription } from "@/lib/brev-api";
+
+export interface SpecialistContext {
+  repoMeta?: { owner: string; repo: string; branch?: string };
+  scoutOutput?: ScoutOutput;
+  totalFilesInRepo?: number;
+}
 
 export async function analyzeComputeNeeds(
   fileContents: Record<string, string>,
   userFeedback?: string,
-  previousNeeds?: SpecialistOutput
+  previousNeeds?: SpecialistOutput,
+  context?: SpecialistContext
 ): Promise<SpecialistOutput> {
   const formattedContents = Object.entries(fileContents)
     .map(([name, content]) => `--- ${name} ---\n${content}`)
@@ -14,8 +21,34 @@ export async function analyzeComputeNeeds(
 
   const gpuCatalog = getGpuCatalogDescription();
 
-  let prompt = `You are an NVIDIA Solutions Architect specializing in ML/AI workloads. Your job is to analyze code and provide comprehensive GPU compute recommendations.
+  // Build context sections
+  let repoContextSection = "";
+  if (context?.repoMeta) {
+    repoContextSection = `
+## REPOSITORY CONTEXT
+- **Repository**: ${context.repoMeta.owner}/${context.repoMeta.repo}
+- **Branch**: ${context.repoMeta.branch || "main"}
+- **Total Files Scanned**: ${context.totalFilesInRepo || "Unknown"}
+`;
+  }
 
+  let scoutContextSection = "";
+  if (context?.scoutOutput) {
+    scoutContextSection = `
+## SCOUT AI'S FILE SELECTION REASONING
+The Scout AI analyzed the repository structure and selected the following files for deep analysis.
+**Scout's reasoning for file selection:**
+${context.scoutOutput.reasoning}
+
+**Selected Files:**
+${context.scoutOutput.selected_paths.map(p => `- ${p}`).join('\n')}
+
+This context helps you understand *why* these specific files were chosen and what signals the Scout detected in the repository structure.
+`;
+  }
+
+  let prompt = `You are an NVIDIA Solutions Architect specializing in ML/AI workloads. Your job is to analyze code and provide comprehensive GPU compute recommendations.
+${repoContextSection}${scoutContextSection}
 ## AVAILABLE GPU OPTIONS (for context)
 ${gpuCatalog}
 
